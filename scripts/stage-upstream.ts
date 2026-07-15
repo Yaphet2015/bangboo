@@ -92,7 +92,12 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
     // A few upstream fs.watch/process-drain tests can miss an event under a
     // saturated CI runner. Two per-test retries filter those timing flakes
     // while preserving the suite as a hard gate for deterministic failures.
-    await run("npm", ["test", "--", "--retry=2"], packageDir);
+    const testArguments = ["test", "--", "--retry=2"];
+    // The upstream #5303 regression uses 50ms shell ticks against a 100ms idle
+    // grace. GitHub's macOS ARM runners can starve it when test files execute
+    // concurrently, so serialize files there without skipping any coverage.
+    if (process.platform === "darwin") testArguments.push("--no-file-parallelism");
+    await run("npm", testArguments, packageDir);
   }
 
   const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
