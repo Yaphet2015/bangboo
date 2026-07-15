@@ -12,6 +12,7 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 let installRoot: string;
 let installedPackage: string;
 const packTimeout = process.platform === "win32" ? 900_000 : 300_000;
+const installTimeout = process.platform === "win32" ? 600_000 : 180_000;
 
 describe("packed Bangboo CLI", () => {
   beforeAll(async () => {
@@ -28,7 +29,7 @@ describe("packed Bangboo CLI", () => {
       "--no-package-lock",
       join(repositoryRoot, "artifacts", archives[0]!),
     ]);
-    await execFileAsync(install.command, install.args, { timeout: 180_000 });
+    await execFileAsync(install.command, install.args, { timeout: installTimeout });
     installedPackage = join(installRoot, "node_modules", "bangboo");
   }, packTimeout);
 
