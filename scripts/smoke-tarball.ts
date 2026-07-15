@@ -3,6 +3,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { resolveNpmCommand } from "../src/npm-command.js";
 
 const execFileAsync = promisify(execFile);
 const archiveArgument = process.argv[2];
@@ -18,7 +19,8 @@ const upgradePrefix = join(root, "upgrade-prefix");
 const oldPackage = join(root, "old-package");
 
 async function npm(args: string[], cwd = root): Promise<string> {
-  const result = await execFileAsync("npm", args, { cwd, timeout: 180_000 });
+  const resolved = resolveNpmCommand(args);
+  const result = await execFileAsync(resolved.command, resolved.args, { cwd, timeout: 180_000 });
   return result.stdout;
 }
 

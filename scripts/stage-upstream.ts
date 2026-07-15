@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { access, copyFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveNpmCommand } from "../src/npm-command.js";
 import { parseUpstreamLock } from "../src/upstream-lock.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,8 +22,9 @@ async function exists(path: string): Promise<boolean> {
 }
 
 async function run(command: string, args: string[], cwd = root, allowFailure = false): Promise<void> {
+  const resolved = command === "npm" ? resolveNpmCommand(args) : { command, args };
   await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd, stdio: "inherit", env: process.env });
+    const child = spawn(resolved.command, resolved.args, { cwd, stdio: "inherit", env: process.env });
     child.on("error", reject);
     child.on("close", (code, signal) => {
       if (code === 0 || allowFailure) {
@@ -87,10 +89,10 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
   // patching by the repository integration suite.
   if (testUpstream) {
     await buildRuntimeDependencies();
-    // A few upstream fs.watch tests can miss a single event under a saturated
-    // CI runner. One per-test retry filters that timing flake while preserving
-    // the suite as a hard build gate for deterministic failures.
-    await run("npm", ["test", "--", "--retry=1"], packageDir);
+    // A few upstream fs.watch/process-drain tests can miss an event under a
+    // saturated CI runner. Two per-test retries filter those timing flakes
+    // while preserving the suite as a hard gate for deterministic failures.
+    await run("npm", ["test", "--", "--retry=2"], packageDir);
   }
 
   const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();

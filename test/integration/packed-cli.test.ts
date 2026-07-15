@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, test } from "vitest";
+import { resolveNpmCommand } from "../../src/npm-command.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -13,15 +14,20 @@ let installedPackage: string;
 
 describe("packed Bangboo CLI", () => {
   beforeAll(async () => {
-    await execFileAsync("npm", ["run", "pack"], { cwd: repositoryRoot, timeout: 300_000 });
+    const pack = resolveNpmCommand(["run", "pack"]);
+    await execFileAsync(pack.command, pack.args, { cwd: repositoryRoot, timeout: 300_000 });
     const archives = (await readdir(join(repositoryRoot, "artifacts"))).filter((name) => name === "bangboo-0.1.0.tgz");
     expect(archives).toHaveLength(1);
     installRoot = await mkdtemp(join(tmpdir(), "bangboo-install-"));
-    await execFileAsync(
-      "npm",
-      ["install", "--prefix", installRoot, "--ignore-scripts", "--no-package-lock", join(repositoryRoot, "artifacts", archives[0]!)],
-      { timeout: 180_000 },
-    );
+    const install = resolveNpmCommand([
+      "install",
+      "--prefix",
+      installRoot,
+      "--ignore-scripts",
+      "--no-package-lock",
+      join(repositoryRoot, "artifacts", archives[0]!),
+    ]);
+    await execFileAsync(install.command, install.args, { timeout: 180_000 });
     installedPackage = join(installRoot, "node_modules", "bangboo");
   }, 300_000);
 

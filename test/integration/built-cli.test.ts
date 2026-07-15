@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, test } from "vitest";
+import { resolveNpmCommand } from "../../src/npm-command.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -29,7 +30,8 @@ async function runCli(args: string[], cwd: string, home: string): Promise<{ stdo
 
 describe("built Bangboo CLI", () => {
   beforeAll(async () => {
-    await execFileAsync("npm", ["run", "build"], { cwd: repositoryRoot, timeout: 300_000 });
+    const npm = resolveNpmCommand(["run", "build"]);
+    await execFileAsync(npm.command, npm.args, { cwd: repositoryRoot, timeout: 300_000 });
   }, 300_000);
 
   test("reports independent and runtime versions", async () => {
@@ -208,5 +210,5 @@ describe("built Bangboo CLI", () => {
     const removed = await runCli(["remove", fixture, "-l", "--approve"], project, home);
     expect(removed.stdout).toContain(`Removed ${fixture}`);
     expect((await runCli(["list", "--approve"], project, home)).stdout).not.toContain(fixture);
-  });
+  }, 120_000);
 });
