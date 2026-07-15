@@ -1,0 +1,129 @@
+diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent/src/cli/startup-ui.ts
+--- a/packages/coding-agent/src/cli/startup-ui.ts
++++ b/packages/coding-agent/src/cli/startup-ui.ts
+@@ -1,7 +1,6 @@
+ import { ProcessTerminal, setKeybindings, TUI } from "@earendil-works/pi-tui";
+ import { existsSync } from "fs";
+ import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir, getSettingsPath, PACKAGE_NAME } from "../config.ts";
+-import { areExperimentalFeaturesEnabled } from "../core/experimental.ts";
+ import { KeybindingsManager } from "../core/keybindings.ts";
+ import { DefaultPackageManager, type ResolvedResource } from "../core/package-manager.ts";
+ import { SettingsManager } from "../core/settings-manager.ts";
+@@ -23,20 +22,20 @@ import {
+ 	type Theme,
+ } from "../modes/interactive/theme/theme.ts";
+ 
+-const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+-const OFFICIAL_APP_NAME = "pi";
+-const OFFICIAL_CONFIG_DIR_NAME = ".pi";
++const BANGBOO_PACKAGE_NAME = "bangboo";
++const BANGBOO_APP_NAME = "bangboo";
++const BANGBOO_CONFIG_DIR_NAME = ".bangboo";
+ 
+ interface DistributionMetadata {
+ 	packageName: string;
+ 	appName: string;
+ 	configDirName: string;
+ }
+ 
+-function isOfficialDistribution({ packageName, appName, configDirName }: DistributionMetadata): boolean {
++function isBangbooDistribution({ packageName, appName, configDirName }: DistributionMetadata): boolean {
+ 	return (
+-		packageName === OFFICIAL_PACKAGE_NAME &&
+-		appName === OFFICIAL_APP_NAME &&
+-		configDirName === OFFICIAL_CONFIG_DIR_NAME
++		packageName === BANGBOO_PACKAGE_NAME &&
++		appName === BANGBOO_APP_NAME &&
++		configDirName === BANGBOO_CONFIG_DIR_NAME
+ 	);
+ }
+@@ -107,14 +106,13 @@ async function clearStartupTui(ui: TUI): Promise<void> {
+ 
+ /**
+  * First-time setup runs when all of these hold:
+- * - this is the official Pi distribution (not a fork/rebrand)
+- * - experimental features are enabled (PI_EXPERIMENTAL=1)
++ * - this is the Bangboo distribution
+  * - the default agent directory is used (no custom agent dir override)
+  * - setup was not completed before (settings.json does not exist)
+  */
+ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()): boolean {
+ 	if (
+-		!isOfficialDistribution({
++		!isBangbooDistribution({
+ 			packageName: PACKAGE_NAME,
+ 			appName: APP_NAME,
+ 			configDirName: CONFIG_DIR_NAME,
+@@ -120,9 +118,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
+ 	) {
+ 		return false;
+ 	}
+-	if (!areExperimentalFeaturesEnabled()) {
+-		return false;
+-	}
+ 	if (process.env[ENV_AGENT_DIR]) {
+ 		return false;
+ 	}
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -566,7 +566,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
+ 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
+ 
+-	// Experimental first-time setup: theme choice and analytics opt-in.
++	// First-time setup: theme choice and an explicit privacy notice.
+ 	// Runs before any runtime services are created so the chosen settings apply everywhere.
+ 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
+ 		await showFirstTimeSetup(startupSettingsManager);
+diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
+--- a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
++++ b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
+@@ -23,10 +23,7 @@ const THEME_OPTIONS: Array<{ value: TerminalTheme; label: string }> = [
+ 	{ value: "light", label: "Light" },
+ ];
+ 
+-const ANALYTICS_OPTIONS: Array<{ value: boolean; label: string }> = [
+-	{ value: true, label: "Share anonymous usage data" },
+-	{ value: false, label: "Don't share" },
+-];
++const ANALYTICS_OPTIONS: Array<{ value: boolean; label: string }> = [{ value: false, label: "Product analytics disabled" }];
+ 
+ const SETUP_LOGO_LINES = ["██████", "██  ██", "████  ██", "██    ██"];
+ 
+@@ -65,7 +62,7 @@ export class FirstTimeSetupComponent extends Container {
+ 				this.themeIndex,
+ 			);
+ 		} else {
+-			this.addChild(new Text(theme.fg("text", "Opt-in to anonymous usage data sharing?"), 1, 0));
++			this.addChild(new Text(theme.fg("text", "Product analytics are disabled."), 1, 0));
+ 			this.addChild(
+ 				new Text(
+ 					theme.fg(
+diff --git a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
+--- a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
++++ b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
+@@ -545,13 +545,6 @@ export class SettingsSelector extends Container {
+ 				currentValue: config.quietStartup ? "true" : "false",
+ 				values: ["true", "false"],
+ 			},
+-			{
+-				id: "install-telemetry",
+-				label: "Install telemetry",
+-				description: "Send an anonymous version/update ping after changelog-detected updates",
+-				currentValue: config.enableInstallTelemetry ? "true" : "false",
+-				values: ["true", "false"],
+-			},
+ 			{
+ 				id: "default-project-trust",
+ 				label: "Default project trust",
+@@ -783,9 +776,6 @@ export class SettingsSelector extends Container {
+ 					case "quiet-startup":
+ 						callbacks.onQuietStartupChange(newValue === "true");
+ 						break;
+-					case "install-telemetry":
+-						callbacks.onEnableInstallTelemetryChange(newValue === "true");
+-						break;
+ 					case "default-project-trust": {
+ 						const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);
+ 						if (defaultProjectTrust) {

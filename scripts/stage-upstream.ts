@@ -9,6 +9,7 @@ const cacheDir = join(root, ".cache", "pi-upstream");
 const stageDir = join(root, ".bangboo-build", "upstream");
 const patchDir = join(root, "patches");
 const packageDir = join(stageDir, "packages", "coding-agent");
+let runtimeDependenciesBuilt = false;
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -40,7 +41,15 @@ async function copyOwnedFile(name: string): Promise<void> {
   }
 }
 
-async function stage(): Promise<void> {
+async function buildRuntimeDependencies(): Promise<void> {
+  if (runtimeDependenciesBuilt) return;
+  await run("npm", ["run", "build"], join(stageDir, "packages", "tui"));
+  await run("npm", ["exec", "--offline", "--", "tsgo", "-p", "tsconfig.build.json"], join(stageDir, "packages", "ai"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "agent"));
+  runtimeDependenciesBuilt = true;
+}
+
+async function stage(installDependencies: boolean, testUpstream: boolean): Promise<void> {
   const lock = parseUpstreamLock(await readFile(join(root, "upstream.lock.json"), "utf8"));
 
   await mkdir(dirname(cacheDir), { recursive: true });
@@ -67,6 +76,23 @@ async function stage(): Promise<void> {
     );
   }
 
+  // Install while coding-agent still has its upstream workspace name. Renaming it
+  // first makes npm treat orchestrator's peer as an external registry dependency.
+  if (installDependencies) {
+    await run("npm", ["ci", "--ignore-scripts"], stageDir);
+  }
+
+  // Run the pristine upstream suite before branding changes its deliberate
+  // identity and path expectations. Bangboo-specific behavior is tested after
+  // patching by the repository integration suite.
+  if (testUpstream) {
+    await buildRuntimeDependencies();
+    // A few upstream fs.watch tests can miss a single event under a saturated
+    // CI runner. One per-test retry filters that timing flake while preserving
+    // the suite as a hard build gate for deterministic failures.
+    await run("npm", ["test", "--", "--retry=1"], packageDir);
+  }
+
   const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
   if (patches.length === 0) throw new Error("No Bangboo patches found");
   for (const patch of patches) {
@@ -75,7 +101,12 @@ async function stage(): Promise<void> {
     await run("git", ["apply", path], stageDir);
   }
 
-  await Promise.all([copyOwnedFile("README.md"), copyOwnedFile("LICENSE"), copyOwnedFile("NOTICE")]);
+  await Promise.all([
+    copyOwnedFile("README.md"),
+    copyOwnedFile("LICENSE"),
+    copyOwnedFile("NOTICE"),
+    copyOwnedFile("CHANGELOG.md"),
+  ]);
 
   const bangbooManifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8")) as {
     name?: string;
@@ -93,10 +124,8 @@ async function stage(): Promise<void> {
 }
 
 async function build(): Promise<void> {
-  await run("npm", ["ci", "--ignore-scripts"], stageDir);
-  for (const workspace of ["packages/tui", "packages/ai", "packages/agent", "packages/coding-agent"]) {
-    await run("npm", ["run", "build"], join(stageDir, workspace));
-  }
+  await buildRuntimeDependencies();
+  await run("npm", ["run", "build"], packageDir);
 }
 
 async function pack(): Promise<void> {
@@ -106,8 +135,10 @@ async function pack(): Promise<void> {
 }
 
 const argumentsSet = new Set(process.argv.slice(2));
-await stage();
-if (argumentsSet.has("--build") || argumentsSet.has("--pack")) await build();
+const shouldBuild = argumentsSet.has("--build") || argumentsSet.has("--pack");
+const shouldTestUpstream = argumentsSet.has("--upstream-test") || argumentsSet.has("--pack");
+await stage(shouldBuild || shouldTestUpstream, shouldTestUpstream);
+if (shouldBuild) await build();
 if (argumentsSet.has("--pack")) await pack();
 
 console.log(`Bangboo staging ready at ${stageDir}`);

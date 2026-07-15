@@ -1,0 +1,102 @@
+diff --git a/packages/coding-agent/src/config.ts b/packages/coding-agent/src/config.ts
+--- a/packages/coding-agent/src/config.ts
++++ b/packages/coding-agent/src/config.ts
+@@ -333,7 +333,7 @@ export function getSelfUpdateUnavailableInstruction(
+ 	const method = detectInstallMethod();
+ 	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
+ 	if (method === "bun-binary") {
+-		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
++		return "Install the latest Bangboo package from npm: npm install --global bangboo@latest";
+ 	}
+ 	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
+ 	if (command) {
+@@ -515,10 +515,10 @@ export function getShareViewerUrl(gistId: string): string | undefined {
+ }
+ 
+ // =============================================================================
+-// User Config Paths (~/.pi/agent/*)
++// User Config Paths (~/.bangboo/agent/*)
+ // =============================================================================
+ 
+-/** Get the agent config directory (e.g., ~/.pi/agent/) */
++/** Get the agent config directory (e.g., ~/.bangboo/agent/) */
+ export function getAgentDir(): string {
+ 	const envDir = process.env[ENV_AGENT_DIR];
+ 	if (envDir) {
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -59,3 +59,3 @@ import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.
+ 
+-const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "pi -ne".';
++const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
+ 
+diff --git a/packages/coding-agent/src/core/export-html/template.html b/packages/coding-agent/src/core/export-html/template.html
+--- a/packages/coding-agent/src/core/export-html/template.html
++++ b/packages/coding-agent/src/core/export-html/template.html
+@@ -3,7 +3,7 @@
+ <head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+-  <title>Session Export</title>
++  <title>Bangboo Session Export</title>
+   <style>
+ {{CSS}}
+   </style>
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -3420,8 +3420,8 @@ export class InteractiveMode {
+ 		this.chatContainer.addChild(
+ 			new Text(
+ 				theme.fg(
+ 					"warning",
+-					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
++					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart Bangboo.`,
+ 				),
+ 				1,
+ 				0,
+@@ -3549,6 +3549,6 @@ export class InteractiveMode {
+ 		try {
+ 			this.ui.stop();
+ 		} catch {}
+-		console.error("pi exiting due to uncaughtException:");
++		console.error("Bangboo exiting due to uncaughtException:");
+ 		console.error(error);
+ 		process.exit(1);
+
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -113,6 +113,5 @@ import { CustomMessageComponent } from "./components/custom-message.ts";
+ import { DaxnutsComponent } from "./components/daxnuts.ts";
+ import { DynamicBorder } from "./components/dynamic-border.ts";
+-import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
+ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
+ import { ExtensionInputComponent } from "./components/extension-input.ts";
+ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
+@@ -2727,11 +2726,6 @@ export class InteractiveMode {
+ 				this.editor.setText("");
+ 				return;
+ 			}
+-			if (text === "/dementedelves") {
+-				this.handleDementedDelves();
+-				this.editor.setText("");
+-				return;
+-			}
+ 			if (text === "/resume") {
+ 				this.showSessionSelector();
+ 				this.editor.setText("");
+@@ -5862,12 +5856,6 @@ export class InteractiveMode {
+ 		this.ui.requestRender();
+ 	}
+ 
+-	private handleDementedDelves(): void {
+-		this.chatContainer.addChild(new Spacer(1));
+-		this.chatContainer.addChild(new EarendilAnnouncementComponent());
+-		this.ui.requestRender();
+-	}
+-
+ 	private handleDaxnuts(): void {
+ 		this.chatContainer.addChild(new Spacer(1));
+ 		this.chatContainer.addChild(new DaxnutsComponent(this.ui));

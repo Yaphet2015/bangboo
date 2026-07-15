@@ -1,7 +1,16 @@
 diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
 --- a/packages/coding-agent/src/cli/args.ts
 +++ b/packages/coding-agent/src/cli/args.ts
-@@ -229,7 +229,7 @@ ${chalk.bold("Commands:")}
+@@ -223,13 +223,13 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
++	console.log(`${chalk.bold(APP_NAME)} - AI coding agent with read, bash, edit, write tools
+-
++
+ ${chalk.bold("Usage:")}
+   ${APP_NAME} [options] [@files...] [messages...]
+-
++
+ ${chalk.bold("Commands:")}
    ${APP_NAME} install <source> [-l]     Install extension source and add to settings
    ${APP_NAME} remove <source> [-l]      Remove extension source from settings
    ${APP_NAME} uninstall <source> [-l]   Alias for remove

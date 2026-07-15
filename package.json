@@ -10,14 +10,16 @@
   "scripts": {
     "build": "tsx scripts/stage-upstream.ts --build",
     "pack": "tsx scripts/stage-upstream.ts --pack",
+    "smoke:tarball": "tsx scripts/smoke-tarball.ts",
     "stage": "tsx scripts/stage-upstream.ts",
     "check:upstream": "tsx scripts/check-upstream.ts",
     "test": "vitest run test/unit",
+    "test:upstream": "tsx scripts/stage-upstream.ts --upstream-test",
     "test:integration": "vitest run test/integration",
     "test:all": "vitest run",
     "typecheck": "tsc --noEmit",
     "verify:brand": "tsx scripts/verify-brand.ts",
-    "verify": "npm run typecheck && npm run test:all"
+    "verify": "npm run typecheck && npm run test:all && npm run verify:brand"
   },
   "devDependencies": {
     "@types/node": "24.12.4",

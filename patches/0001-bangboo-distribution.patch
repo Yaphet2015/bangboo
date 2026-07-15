@@ -1,7 +1,7 @@
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
 --- a/packages/coding-agent/package.json
 +++ b/packages/coding-agent/package.json
-@@ -1,13 +1,19 @@
+@@ -1,13 +1,25 @@
  {
 -	"name": "@earendil-works/pi-coding-agent",
 -	"version": "0.80.7",
@@ -15,6 +15,12 @@ diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.
 +		"name": "bangboo",
 +		"configDir": ".bangboo"
 +	},
++	"pi": {
++		"extensions": [],
++		"skills": [],
++		"prompts": [],
++		"themes": []
++	},
 +	"bangboo": {
 +		"runtimeVersion": "0.80.7",
 +		"upstreamTag": "v0.80.7",
@@ -26,7 +32,7 @@ diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.
  	},
  	"main": "./dist/index.js",
  	"types": "./dist/index.d.ts",
-@@ -26,22 +32,22 @@
+@@ -26,22 +38,22 @@
  		"examples",
  		"containerization.md",
  		"CHANGELOG.md",
@@ -127,9 +133,15 @@ diff --git a/packages/coding-agent/src/config.ts b/packages/coding-agent/src/con
  }
  
  let pkg: PackageJson = {};
-@@ -490,6 +495,9 @@ export const APP_NAME: string = piConfigName || "pi";
+@@ -488,9 +493,12 @@ try {
+ const piConfigName: string | undefined = pkg.piConfig?.name;
+-export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
+-export const APP_NAME: string = piConfigName || "pi";
++export const PACKAGE_NAME: string = pkg.name || "bangboo";
++export const APP_NAME: string = piConfigName || "bangboo";
  export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
- export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
++export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".bangboo";
  export const VERSION: string = pkg.version || "0.0.0";
 +export const RUNTIME_VERSION: string = pkg.bangboo?.runtimeVersion || "unknown";
 +export const UPSTREAM_TAG: string = pkg.bangboo?.upstreamTag || "unknown";

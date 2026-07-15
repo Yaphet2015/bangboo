@@ -1,0 +1,19 @@
+Bangboo coding agent
+
+Bangboo incorporates the Pi runtime from:
+  https://github.com/earendil-works/pi.git
+
+Initial runtime provenance:
+  Version: 0.80.7
+  Tag: v0.80.7
+  Commit: 818d67457cdd6b60bce6b121d16b23141c252dd8
+
+The Pi runtime is licensed under the MIT License:
+  Copyright (c) 2025 Mario Zechner
+
+The `pi` package manifest key, @earendil-works/pi-* module names, historical
+@mariozechner/pi-* aliases, and selected PI_* environment variables are kept
+solely as compatibility interfaces for the existing community ecosystem.
+
+Bangboo is an independent distribution. Upstream project names and trademarks
+remain the property of their respective owners.
