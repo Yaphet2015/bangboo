@@ -104,6 +104,9 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
       // These pristine v0.80.7 tests encode POSIX permissions, signals, paths,
       // or glob semantics and fail consistently on GitHub's Windows runner.
       // Linux/macOS execute them; Windows still runs every other upstream file.
+      // Serial execution also avoids a Node/libuv fs-event assertion seen when
+      // multiple upstream watcher fixtures tear down concurrently on Windows.
+      testArguments.push("--no-file-parallelism");
       const incompatibleWindowsTests = [
         "test/config.test.ts",
         "test/footer-width.test.ts",
