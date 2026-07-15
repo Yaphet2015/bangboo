@@ -1,0 +1,28 @@
+{
+  "name": "bangboo-build",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build and release tooling for the Bangboo coding agent",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsx scripts/stage-upstream.ts --build",
+    "pack": "tsx scripts/stage-upstream.ts --pack",
+    "stage": "tsx scripts/stage-upstream.ts",
+    "check:upstream": "tsx scripts/check-upstream.ts",
+    "test": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:all": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify:brand": "tsx scripts/verify-brand.ts",
+    "verify": "npm run typecheck && npm run test:all"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  }
+}

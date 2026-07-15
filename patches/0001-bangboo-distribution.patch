@@ -1,0 +1,184 @@
+diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
+--- a/packages/coding-agent/package.json
++++ b/packages/coding-agent/package.json
+@@ -1,13 +1,19 @@
+ {
+-	"name": "@earendil-works/pi-coding-agent",
+-	"version": "0.80.7",
+-	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
++	"name": "bangboo",
++	"version": "0.1.0",
++	"description": "Bangboo coding agent CLI with a Pi-compatible extension runtime",
+ 	"type": "module",
+ 	"piConfig": {
+-		"configDir": ".pi"
++		"name": "bangboo",
++		"configDir": ".bangboo"
++	},
++	"bangboo": {
++		"runtimeVersion": "0.80.7",
++		"upstreamTag": "v0.80.7",
++		"upstreamCommit": "818d67457cdd6b60bce6b121d16b23141c252dd8"
+ 	},
+ 	"bin": {
+-		"pi": "dist/cli.js"
++		"bangboo": "dist/bangboo.js"
+ 	},
+ 	"main": "./dist/index.js",
+ 	"types": "./dist/index.d.ts",
+@@ -26,22 +32,22 @@
+ 		"examples",
+ 		"containerization.md",
+ 		"CHANGELOG.md",
+-		"npm-shrinkwrap.json"
++		"NOTICE"
+ 	],
+ 	"scripts": {
+ 		"clean": "shx rm -rf dist",
+-		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js && npm run copy-assets",
++		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/bangboo.js dist/cli.js dist/rpc-entry.js && npm run copy-assets",
+ 		"build:binary": "npm --prefix ../tui run build && npm --prefix ../ai run build && npm --prefix ../agent run build && npm run build && bun build --compile ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile dist/pi && npm run copy-binary-assets",
+ 		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
+ 		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/",
+ 		"test": "vitest --run",
+ 		"shrinkwrap": "node ../../scripts/generate-coding-agent-shrinkwrap.mjs",
+-		"prepublishOnly": "npm run clean && npm run build && npm run shrinkwrap"
++		"prepublishOnly": "npm run clean && npm run build"
+ 	},
+ 	"dependencies": {
+-		"@earendil-works/pi-agent-core": "^0.80.7",
+-		"@earendil-works/pi-ai": "^0.80.7",
+-		"@earendil-works/pi-tui": "^0.80.7",
++		"@earendil-works/pi-agent-core": "0.80.7",
++		"@earendil-works/pi-ai": "0.80.7",
++		"@earendil-works/pi-tui": "0.80.7",
+ 		"@silvia-odwyer/photon-node": "0.3.4",
+ 		"chalk": "5.6.2",
+ 		"cross-spawn": "7.0.6",
+@@ -87,13 +93,8 @@
+ 		"tui",
+ 		"agent"
+ 	],
+-	"author": "Mario Zechner",
++	"author": "Bangboo contributors",
+ 	"license": "MIT",
+-	"repository": {
+-		"type": "git",
+-		"url": "git+https://github.com/earendil-works/pi.git",
+-		"directory": "packages/coding-agent"
+-	},
+ 	"engines": {
+ 		"node": ">=22.19.0"
+ 	}
+diff --git a/packages/coding-agent/src/bangboo.ts b/packages/coding-agent/src/bangboo.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/src/bangboo.ts
+@@ -0,0 +1,26 @@
++#!/usr/bin/env node
++
++const compatibilityVariables = [
++	"OFFLINE",
++	"SHARE_VIEWER_URL",
++	"TIMING",
++	"STARTUP_BENCHMARK",
++	"EXPERIMENTAL",
++	"CLEAR_ON_SHRINK",
++	"HARDWARE_CURSOR",
++	"PACKAGE_DIR",
++] as const;
++
++for (const suffix of compatibilityVariables) {
++	const publicName = `BANGBOO_${suffix}`;
++	const compatibilityName = `PI_${suffix}`;
++	if (process.env[publicName] !== undefined) {
++		process.env[compatibilityName] = process.env[publicName];
++	}
++}
++
++process.env.BANGBOO_CODING_AGENT = "true";
++process.env.PI_CODING_AGENT = "true";
++process.env.PI_TELEMETRY = "0";
++
++await import("./cli.ts");
+diff --git a/packages/coding-agent/src/cli.ts b/packages/coding-agent/src/cli.ts
+--- a/packages/coding-agent/src/cli.ts
++++ b/packages/coding-agent/src/cli.ts
+@@ -10,6 +10,7 @@ import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
+ import { main } from "./main.ts";
+ 
+ process.title = APP_NAME;
++process.env.BANGBOO_CODING_AGENT = "true";
+ process.env.PI_CODING_AGENT = "true";
+ process.emitWarning = (() => {}) as typeof process.emitWarning;
+ 
+diff --git a/packages/coding-agent/src/config.ts b/packages/coding-agent/src/config.ts
+--- a/packages/coding-agent/src/config.ts
++++ b/packages/coding-agent/src/config.ts
+@@ -474,6 +474,11 @@ interface PackageJson {
+ 		name?: string;
+ 		configDir?: string;
+ 	};
++	bangboo?: {
++		runtimeVersion?: string;
++		upstreamTag?: string;
++		upstreamCommit?: string;
++	};
+ }
+ 
+ let pkg: PackageJson = {};
+@@ -490,6 +495,9 @@ export const APP_NAME: string = piConfigName || "pi";
+ export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
+ export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+ export const VERSION: string = pkg.version || "0.0.0";
++export const RUNTIME_VERSION: string = pkg.bangboo?.runtimeVersion || "unknown";
++export const UPSTREAM_TAG: string = pkg.bangboo?.upstreamTag || "unknown";
++export const UPSTREAM_COMMIT: string = pkg.bangboo?.upstreamCommit || "unknown";
+ 
+ // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
+ export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
+@@ -499,11 +507,10 @@ export function expandTildePath(path: string): string {
+ 	return normalizePath(path);
+ }
+ 
+-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
+-
+ /** Get the share viewer URL for a gist ID */
+-export function getShareViewerUrl(gistId: string): string {
+-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
++export function getShareViewerUrl(gistId: string): string | undefined {
++	const baseUrl = process.env.BANGBOO_SHARE_VIEWER_URL || process.env.PI_SHARE_VIEWER_URL;
++	if (!baseUrl) return undefined;
+ 	return `${baseUrl}#${gistId}`;
+ }
+ 
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -15,7 +15,16 @@ import { listModels } from "./cli/list-models.ts";
+ import { createProjectTrustContext } from "./cli/project-trust.ts";
+ import { selectSession } from "./cli/session-picker.ts";
+ import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
+-import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
++import {
++	APP_NAME,
++	ENV_SESSION_DIR,
++	expandTildePath,
++	getAgentDir,
++	getPackageDir,
++	RUNTIME_VERSION,
++	UPSTREAM_TAG,
++	VERSION,
++} from "./config.ts";
+ import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
+ import {
+ 	type AgentSessionRuntimeDiagnostic,
+@@ -518,7 +527,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 	time("parseArgs");
+ 
+ 	if (parsed.version) {
+-		console.log(VERSION);
++		console.log(`${APP_NAME} ${VERSION} (runtime ${RUNTIME_VERSION}, upstream ${UPSTREAM_TAG})`);
+ 		process.exit(0);
+ 	}
+ 
