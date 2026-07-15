@@ -11,11 +11,12 @@ const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 let installRoot: string;
 let installedPackage: string;
+const packTimeout = process.platform === "win32" ? 900_000 : 300_000;
 
 describe("packed Bangboo CLI", () => {
   beforeAll(async () => {
     const pack = resolveNpmCommand(["run", "pack"]);
-    await execFileAsync(pack.command, pack.args, { cwd: repositoryRoot, timeout: 300_000 });
+    await execFileAsync(pack.command, pack.args, { cwd: repositoryRoot, timeout: packTimeout });
     const archives = (await readdir(join(repositoryRoot, "artifacts"))).filter((name) => name === "bangboo-0.1.0.tgz");
     expect(archives).toHaveLength(1);
     installRoot = await mkdtemp(join(tmpdir(), "bangboo-install-"));
@@ -29,7 +30,7 @@ describe("packed Bangboo CLI", () => {
     ]);
     await execFileAsync(install.command, install.args, { timeout: 180_000 });
     installedPackage = join(installRoot, "node_modules", "bangboo");
-  }, 300_000);
+  }, packTimeout);
 
   test("ships brand, license, and attribution documents", async () => {
     await expect(readFile(join(installedPackage, "README.md"), "utf8")).resolves.toContain("# Bangboo");

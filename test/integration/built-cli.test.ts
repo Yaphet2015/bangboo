@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, test } from "vitest";
 import { resolveNpmCommand } from "../../src/npm-command.js";
@@ -13,6 +13,10 @@ const cli = join(repositoryRoot, ".bangboo-build", "upstream", "packages", "codi
 const extensionFixtures = join(repositoryRoot, "test", "fixtures", "extensions");
 const packageFixtures = join(repositoryRoot, "test", "fixtures", "packages");
 const stagedPackage = join(repositoryRoot, ".bangboo-build", "upstream", "packages", "coding-agent");
+
+function stagedModuleUrl(...segments: string[]): string {
+  return pathToFileURL(join(stagedPackage, ...segments)).href;
+}
 
 async function runCli(args: string[], cwd: string, home: string): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(process.execPath, [cli, ...args], {
@@ -46,7 +50,7 @@ describe("built Bangboo CLI", () => {
   test("enables Bangboo first-run setup without an experimental flag", async () => {
     const missingSettings = join(await mkdtemp(join(tmpdir(), "bangboo-first-run-")), "settings.json");
     const probe = `
-      import { shouldRunFirstTimeSetup } from ${JSON.stringify(join(stagedPackage, "dist", "cli", "startup-ui.js"))};
+      import { shouldRunFirstTimeSetup } from ${JSON.stringify(stagedModuleUrl("dist", "cli", "startup-ui.js"))};
       delete process.env.BANGBOO_CODING_AGENT_DIR;
       console.log(shouldRunFirstTimeSetup(process.argv[1]));
     `;
@@ -92,8 +96,8 @@ describe("built Bangboo CLI", () => {
 
   test("uses only the Bangboo registry and keeps sharing opt-in", async () => {
     const probe = `
-      import { getLatestPiRelease } from ${JSON.stringify(join(stagedPackage, "dist", "utils", "version-check.js"))};
-      import { getShareViewerUrl } from ${JSON.stringify(join(stagedPackage, "dist", "config.js"))};
+      import { getLatestPiRelease } from ${JSON.stringify(stagedModuleUrl("dist", "utils", "version-check.js"))};
+      import { getShareViewerUrl } from ${JSON.stringify(stagedModuleUrl("dist", "config.js"))};
       let calls = [];
       globalThis.fetch = async (url, options) => {
         calls.push({ url: String(url), userAgent: options?.headers?.["User-Agent"] });
@@ -184,7 +188,7 @@ describe("built Bangboo CLI", () => {
     expect(`${help.stdout}\n${help.stderr}`).toContain("--conventional-fixture");
 
     const resourceProbe = `
-      import { DefaultResourceLoader, SettingsManager } from ${JSON.stringify(join(stagedPackage, "dist", "index.js"))};
+      import { DefaultResourceLoader, SettingsManager } from ${JSON.stringify(stagedModuleUrl("dist", "index.js"))};
       const cwd = process.argv[1];
       const agentDir = process.argv[2];
       const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
