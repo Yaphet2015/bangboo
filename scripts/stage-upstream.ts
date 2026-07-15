@@ -104,9 +104,12 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
       // These pristine v0.80.7 tests encode POSIX permissions, signals, paths,
       // or glob semantics and fail consistently on GitHub's Windows runner.
       // Linux/macOS execute them; Windows still runs every other upstream file.
-      // Serial execution also avoids a Node/libuv fs-event assertion seen when
-      // multiple upstream watcher fixtures tear down concurrently on Windows.
+      // Serial execution avoids overlapping watcher fixture teardown. The
+      // footer-data-provider suite must also run in its own Vitest process:
+      // libuv can otherwise deliver a late Windows fs-event while later git
+      // update tests are replacing unrelated temporary repositories.
       testArguments.push("--no-file-parallelism");
+      const isolatedWindowsTests = ["test/footer-data-provider.test.ts"];
       const incompatibleWindowsTests = [
         "test/config.test.ts",
         "test/footer-width.test.ts",
@@ -118,9 +121,15 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
         "test/tools.test.ts",
         "test/trust-selector.test.ts",
       ];
+      for (const path of isolatedWindowsTests) testArguments.push("--exclude", path);
       for (const path of incompatibleWindowsTests) testArguments.push("--exclude", path);
+      await run("npm", testArguments, packageDir);
+      for (const path of isolatedWindowsTests) {
+        await run("npm", ["test", "--", "--retry=2", "--no-file-parallelism", path], packageDir);
+      }
+      testArguments.length = 0;
     }
-    await run("npm", testArguments, packageDir);
+    if (testArguments.length > 0) await run("npm", testArguments, packageDir);
   }
 
   const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
