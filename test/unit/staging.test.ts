@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { buildStagingCommands } from "../../src/staging.js";
 
@@ -17,5 +18,12 @@ describe("buildStagingCommands", () => {
       { command: "git", args: ["apply", "--check", "/repo/patches/0002.patch"], cwd: "/tmp/stage" },
       { command: "git", args: ["apply", "/repo/patches/0002.patch"], cwd: "/tmp/stage" },
     ]);
+  });
+
+  test("includes the provider usage statusline patch in order", async () => {
+    const patchDir = new URL("../../patches/", import.meta.url);
+    const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
+
+    expect(patches.at(-1)).toBe("0006-provider-usage-statusline.patch");
   });
 });

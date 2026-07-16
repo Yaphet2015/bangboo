@@ -1,0 +1,406 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 5083e60f..d912eee5 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -85,6 +85,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+ import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+ import type { ModelRegistry } from "./model-registry.ts";
+ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
++import { ProviderUsageTracker } from "./provider-usage.ts";
+ import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+ import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
+ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
+@@ -132,6 +133,7 @@ export type AgentSessionEvent =
+ 			willRetry: boolean;
+ 	  }
+ 	| { type: "agent_settled" }
++	| { type: "provider_usage"; text: string | undefined }
+ 	| {
+ 			type: "queue_update";
+ 			steering: readonly string[];
+@@ -327,6 +329,7 @@ export class AgentSession {
+ 
+ 	// Model registry for API key resolution
+ 	private _modelRegistry: ModelRegistry;
++	private _providerUsageTracker: ProviderUsageTracker;
+ 
+ 	// Tool registry for extension getTools/setTools
+ 	private _toolRegistry: Map<string, AgentTool> = new Map();
+@@ -348,6 +351,11 @@ export class AgentSession {
+ 		this._customTools = config.customTools ?? [];
+ 		this._cwd = config.cwd;
+ 		this._modelRegistry = config.modelRegistry;
++		this._providerUsageTracker = new ProviderUsageTracker({
++			getApiKey: (provider) => this._modelRegistry.getApiKeyForProvider(provider),
++			onStatus: (text) => this._emit({ type: "provider_usage", text }),
++		});
++		this._providerUsageTracker.selectProvider(this.agent.state.model?.provider);
+ 		this._extensionRunnerRef = config.extensionRunnerRef;
+ 		this._initialActiveToolNames = config.initialActiveToolNames;
+ 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
+@@ -372,6 +380,11 @@ export class AgentSession {
+ 		return this._modelRegistry;
+ 	}
+ 
++	/** Record provider response quota metadata without affecting the model request. */
++	handleProviderResponse(provider: string, headers: Record<string, string>): void {
++		this._providerUsageTracker.handleResponse(provider, headers);
++	}
++
+ 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
+ 		apiKey: string;
+ 		headers?: Record<string, string>;
+@@ -536,6 +549,7 @@ export class AgentSession {
+ 		try {
+ 			await this._extensionRunner.emit({ type: "agent_settled" });
+ 			this._emit({ type: "agent_settled" });
++			void this._providerUsageTracker.refreshSelectedProvider();
+ 		} finally {
+ 			this._resolveIdleWaitIfIdle();
+ 		}
+@@ -810,6 +824,7 @@ export class AgentSession {
+ 		this._extensionRunner.invalidate(
+ 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+ 		);
++		this._providerUsageTracker.dispose();
+ 		this._disconnectFromAgent();
+ 		this._eventListeners = [];
+ 		cleanupSessionResources(this.sessionId);
+@@ -1520,6 +1535,7 @@ export class AgentSession {
+ 		previousModel: Model<any> | undefined,
+ 		source: "set" | "cycle" | "restore",
+ 	): Promise<void> {
++		this._providerUsageTracker.selectProvider(nextModel.provider);
+ 		if (modelsAreEqual(previousModel, nextModel)) return;
+ 		await this._extensionRunner.emit({
+ 			type: "model_select",
+diff --git a/packages/coding-agent/src/core/provider-usage.ts b/packages/coding-agent/src/core/provider-usage.ts
+new file mode 100644
+index 00000000..6296fd98
+--- /dev/null
++++ b/packages/coding-agent/src/core/provider-usage.ts
+@@ -0,0 +1,155 @@
++export interface ProviderUsage {
++	remainingPercent: number;
++	windowLabel: string;
++}
++
++type HeaderMap = Record<string, string | undefined>;
++type FetchResponse = { ok: boolean; json(): Promise<unknown> };
++type FetchFunction = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<FetchResponse>;
++
++const SUPPORTED_PROVIDERS = new Set(["openai-codex", "zai", "zai-coding-cn"]);
++const ZAI_ENDPOINTS: Record<string, string> = {
++	zai: "https://api.z.ai/api/monitor/usage/quota/limit",
++	"zai-coding-cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
++};
++
++function finiteNumber(value: unknown): number | undefined {
++	const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
++	return Number.isFinite(number) ? number : undefined;
++}
++
++function normalizePercent(value: number): number {
++	return Math.round(Math.min(100, Math.max(0, value)));
++}
++
++export function parseCodexWeeklyUsage(headers: HeaderMap): ProviderUsage | undefined {
++	const used = finiteNumber(headers["x-codex-secondary-used-percent"]);
++	const windowMinutes = finiteNumber(headers["x-codex-secondary-window-minutes"]);
++	if (used === undefined || windowMinutes !== 10_080) return undefined;
++	return { remainingPercent: normalizePercent(100 - used), windowLabel: "weekly" };
++}
++
++function formatWindow(numberValue: unknown, unitValue: unknown): string | undefined {
++	const number = finiteNumber(numberValue);
++	if (number === undefined || number <= 0) return undefined;
++	const unit = typeof unitValue === "string" ? unitValue.toLowerCase() : unitValue;
++	if (unit === 6 && number === 1) return "weekly";
++	let suffix: string | undefined;
++	if (unit === 3 || unit === "hour" || unit === "hours" || unit === "h") suffix = "h";
++	else if (unit === 4 || unit === "day" || unit === "days" || unit === "d") suffix = "d";
++	else if (unit === 2 || unit === "minute" || unit === "minutes" || unit === "m") suffix = "m";
++	return suffix ? `${number}${suffix}` : undefined;
++}
++
++export function parseZaiUsage(payload: unknown): ProviderUsage | undefined {
++	if (!payload || typeof payload !== "object") return undefined;
++	const data = (payload as { data?: unknown }).data;
++	if (!data || typeof data !== "object") return undefined;
++	const limits = (data as { limits?: unknown }).limits;
++	if (!Array.isArray(limits)) return undefined;
++	const limit = limits.find(
++		(value): value is Record<string, unknown> =>
++			!!value && typeof value === "object" && (value as { type?: unknown }).type === "TOKENS_LIMIT",
++	);
++	if (!limit) return undefined;
++	const windowLabel = formatWindow(limit.number, limit.unit);
++	if (!windowLabel) return undefined;
++	const explicitRemaining = finiteNumber(limit.remainingPercentage ?? limit.remainingPercent);
++	const consumed = finiteNumber(limit.percentage);
++	const remaining = explicitRemaining ?? (consumed === undefined ? undefined : 100 - consumed);
++	if (remaining === undefined) return undefined;
++	return { remainingPercent: normalizePercent(remaining), windowLabel };
++}
++
++export function applyProviderUsageStatus(
++	text: string | undefined,
++	setStatus: (key: string, text: string | undefined) => void,
++	requestRender: () => void,
++): void {
++	setStatus("bangboo-provider-usage", text);
++	requestRender();
++}
++
++export interface ProviderUsageTrackerOptions {
++	getApiKey(provider: string): Promise<string | undefined>;
++	onStatus(text: string | undefined): void;
++	fetchFn?: FetchFunction;
++	timeoutMs?: number;
++}
++
++export class ProviderUsageTracker {
++	private readonly getApiKey: ProviderUsageTrackerOptions["getApiKey"];
++	private readonly onStatus: ProviderUsageTrackerOptions["onStatus"];
++	private readonly fetchFn: FetchFunction;
++	private readonly timeoutMs: number;
++	private readonly cache = new Map<string, ProviderUsage>();
++	private selectedProvider: string | undefined;
++	private inFlight: Promise<void> | undefined;
++	private abortController: AbortController | undefined;
++
++	constructor(options: ProviderUsageTrackerOptions) {
++		this.getApiKey = options.getApiKey;
++		this.onStatus = options.onStatus;
++		this.fetchFn = options.fetchFn ?? (fetch as FetchFunction);
++		this.timeoutMs = options.timeoutMs ?? 3_000;
++	}
++
++	selectProvider(provider: string | undefined): void {
++		this.selectedProvider = provider && SUPPORTED_PROVIDERS.has(provider) ? provider : undefined;
++		this.publish(this.selectedProvider ? this.cache.get(this.selectedProvider) : undefined);
++	}
++
++	handleResponse(provider: string, headers: HeaderMap): void {
++		if (provider !== "openai-codex") return;
++		const usage = parseCodexWeeklyUsage(headers);
++		if (!usage) return;
++		this.cache.set(provider, usage);
++		if (provider === this.selectedProvider) this.publish(usage);
++	}
++
++	refreshSelectedProvider(): Promise<void> {
++		if (this.inFlight) return this.inFlight;
++		const provider = this.selectedProvider;
++		const endpoint = provider ? ZAI_ENDPOINTS[provider] : undefined;
++		if (!provider || !endpoint) return Promise.resolve();
++		const operation = (async () => {
++			try {
++				const apiKey = await this.getApiKey(provider);
++				if (!apiKey) return;
++				const controller = new AbortController();
++				this.abortController = controller;
++				const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
++				try {
++					const response = await this.fetchFn(endpoint, {
++						headers: { Authorization: `Bearer ${apiKey}` },
++						signal: controller.signal,
++					});
++					if (!response.ok) return;
++					const usage = parseZaiUsage(await response.json());
++					if (!usage) return;
++					this.cache.set(provider, usage);
++					if (provider === this.selectedProvider) this.publish(usage);
++				} finally {
++					clearTimeout(timeout);
++					if (this.abortController === controller) this.abortController = undefined;
++				}
++			} catch {
++				// Quota metadata must never affect normal agent operation.
++			}
++		})();
++		const tracked = operation.finally(() => {
++			if (this.inFlight === tracked) this.inFlight = undefined;
++		});
++		this.inFlight = tracked;
++		return tracked;
++	}
++
++	dispose(): void {
++		this.abortController?.abort();
++		this.abortController = undefined;
++	}
++
++	private publish(usage: ProviderUsage | undefined): void {
++		this.onStatus(usage ? `(${usage.remainingPercent}% ${usage.windowLabel})` : undefined);
++	}
++}
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index 4fc98670..deac6bc6 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -251,6 +251,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 	).filter((name) => !excludedToolNameSet?.has(name));
+ 
+ 	let agent: Agent;
++	let session: AgentSession | undefined;
+ 
+ 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
+ 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
+@@ -344,7 +345,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 			}
+ 			return runner.emitBeforeProviderRequest(payload);
+ 		},
+-		onResponse: async (response, _model) => {
++		onResponse: async (response, responseModel) => {
++			session?.handleProviderResponse(responseModel.provider, response.headers);
+ 			const runner = extensionRunnerRef.current;
+ 			if (!runner?.hasHandlers("after_provider_response")) {
+ 				return;
+@@ -382,7 +384,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 		sessionManager.appendThinkingLevelChange(thinkingLevel);
+ 	}
+ 
+-	const session = new AgentSession({
++	session = new AgentSession({
+ 		agent,
+ 		sessionManager,
+ 		settingsManager,
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index e5b4491c..5b2a13b7 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -86,6 +86,7 @@ import { createCompactionSummaryMessage } from "../../core/messages.ts";
+ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+ import { DefaultPackageManager } from "../../core/package-manager.ts";
+ import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
++import { applyProviderUsageStatus } from "../../core/provider-usage.ts";
+ import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+@@ -2805,6 +2806,14 @@ export class InteractiveMode {
+ 		this.footer.invalidate();
+ 
+ 		switch (event.type) {
++			case "provider_usage":
++				applyProviderUsageStatus(
++					event.text,
++					(key, text) => this.setExtensionStatus(key, text),
++					() => this.ui.requestRender(),
++				);
++				break;
++
+ 			case "agent_start":
+ 				this.pendingTools.clear();
+ 				if (this.settingsManager.getShowTerminalProgress()) {
+diff --git a/packages/coding-agent/test/provider-usage.test.ts b/packages/coding-agent/test/provider-usage.test.ts
+new file mode 100644
+index 00000000..34846a15
+--- /dev/null
++++ b/packages/coding-agent/test/provider-usage.test.ts
+@@ -0,0 +1,105 @@
++import { describe, expect, test, vi } from "vitest";
++import {
++	applyProviderUsageStatus,
++	parseCodexWeeklyUsage,
++	parseZaiUsage,
++	ProviderUsageTracker,
++} from "../src/core/provider-usage.ts";
++
++describe("provider usage parsing", () => {
++	test("converts Codex weekly used percentage to remaining percentage", () => {
++		expect(parseCodexWeeklyUsage({
++			"x-codex-secondary-used-percent": "28.4",
++			"x-codex-secondary-window-minutes": "10080",
++		})).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
++	});
++
++	test("ignores malformed and non-weekly Codex limits", () => {
++		expect(parseCodexWeeklyUsage({
++			"x-codex-secondary-used-percent": "28",
++			"x-codex-secondary-window-minutes": "300",
++		})).toBeUndefined();
++		expect(parseCodexWeeklyUsage({ "x-codex-secondary-used-percent": "nope" })).toBeUndefined();
++	});
++
++	test("parses Z.AI remaining percentage and actual window", () => {
++		expect(parseZaiUsage({
++			data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, remainingPercentage: 71.6 }] },
++		})).toEqual({ remainingPercent: 72, windowLabel: "5h" });
++	});
++
++	test("derives and clamps Z.AI remaining percentage from consumed percentage", () => {
++		expect(parseZaiUsage({
++			data: { limits: [{ type: "TOKENS_LIMIT", unit: "day", number: 7, percentage: 101 }] },
++		})).toEqual({ remainingPercent: 0, windowLabel: "7d" });
++	});
++
++	test("recognizes Z.AI's weekly quota encoding", () => {
++		expect(parseZaiUsage({
++			data: { limits: [{ type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 28 }] },
++		})).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
++	});
++});
++
++describe("ProviderUsageTracker", () => {
++	test("isolates cached values by provider and clears unsupported providers", () => {
++		const statuses: Array<string | undefined> = [];
++		const tracker = new ProviderUsageTracker({
++			getApiKey: async () => undefined,
++			onStatus: (text) => statuses.push(text),
++		});
++		tracker.selectProvider("openai-codex");
++		tracker.handleResponse("openai-codex", {
++			"x-codex-secondary-used-percent": "28",
++			"x-codex-secondary-window-minutes": "10080",
++		});
++		tracker.selectProvider("zai");
++		tracker.selectProvider("anthropic");
++		expect(statuses).toEqual([undefined, "(72% weekly)", undefined, undefined]);
++	});
++
++	test("refreshes Z.AI and preserves valid status after transient failure", async () => {
++		const statuses: Array<string | undefined> = [];
++		const fetchFn = vi.fn()
++			.mockResolvedValueOnce({ ok: true, json: async () => ({
++				data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 28 }] },
++			}) })
++			.mockRejectedValueOnce(new Error("offline"));
++		const tracker = new ProviderUsageTracker({
++			fetchFn,
++			getApiKey: async () => "secret",
++			onStatus: (text) => statuses.push(text),
++		});
++		tracker.selectProvider("zai");
++		await tracker.refreshSelectedProvider();
++		await tracker.refreshSelectedProvider();
++		expect(statuses).toEqual([undefined, "(72% 5h)"]);
++		expect(fetchFn).toHaveBeenCalledWith(
++			"https://api.z.ai/api/monitor/usage/quota/limit",
++			expect.objectContaining({ headers: { Authorization: "Bearer secret" } }),
++		);
++	});
++
++	test("deduplicates concurrent Z.AI refreshes", async () => {
++		let resolveFetch!: (value: unknown) => void;
++		const fetchFn = vi.fn(() => new Promise((resolve) => (resolveFetch = resolve)));
++		const tracker = new ProviderUsageTracker({ fetchFn, getApiKey: async () => "secret", onStatus: () => {} });
++		tracker.selectProvider("zai-coding-cn");
++		const first = tracker.refreshSelectedProvider();
++		const second = tracker.refreshSelectedProvider();
++		await Promise.resolve();
++		resolveFetch({ ok: true, json: async () => ({ data: { limits: [] } }) });
++		await Promise.all([first, second]);
++		expect(first).toBe(second);
++		expect(fetchFn).toHaveBeenCalledTimes(1);
++		expect(fetchFn).toHaveBeenCalledWith("https://open.bigmodel.cn/api/monitor/usage/quota/limit", expect.anything());
++	});
++
++	test("publishes usage through the built-in footer status key", () => {
++		const setStatus = vi.fn();
++		const requestRender = vi.fn();
++		applyProviderUsageStatus("(72% weekly)", setStatus, requestRender);
++		expect(setStatus).toHaveBeenCalledWith("bangboo-provider-usage", "(72% weekly)");
++		expect(requestRender).toHaveBeenCalledTimes(1);
++	});
++});

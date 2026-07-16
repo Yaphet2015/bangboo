@@ -7,3 +7,4 @@
 - Preserved current and historical community extension import compatibility.
 - Disabled upstream product telemetry, announcements, update services, and default sharing.
 - Added pinned-source staging, brand auditing, compatibility tests, scheduled upstream checks, and provenance publishing.
+- Added footer reporting for remaining Codex weekly quota and actual-window Z.AI Coding Plan quota.

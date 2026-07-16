@@ -55,6 +55,15 @@ describe("staged Bangboo package", () => {
     expect(changelog).not.toMatch(/\bPi\b|pi\.dev/u);
   });
 
+  test("includes built-in provider usage tracking", async () => {
+    const source = await readFile(new URL("src/core/provider-usage.ts", packageRoot), "utf8");
+
+    expect(source).toContain('"openai-codex"');
+    expect(source).toContain('"zai"');
+    expect(source).toContain('"zai-coding-cn"');
+    expect(source).toContain('windowLabel: "weekly"');
+  });
+
   test("does not offer upstream telemetry controls", async () => {
     const firstRun = await readFile(
       new URL("src/modes/interactive/components/first-time-setup.ts", packageRoot),
