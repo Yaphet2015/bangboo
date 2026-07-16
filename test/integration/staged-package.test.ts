@@ -22,6 +22,7 @@ describe("staged Bangboo package", () => {
       name: "bangboo",
       version: "0.1.1",
       bin: { bangboo: "dist/bangboo.js" },
+      repository: { type: "git", url: "git+https://github.com/Yaphet2015/bangboo.git" },
       piConfig: { name: "bangboo", configDir: ".bangboo" },
       pi: { extensions: [], skills: [], prompts: [], themes: [] },
       bangboo: {

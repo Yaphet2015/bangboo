@@ -1,7 +1,7 @@
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
 --- a/packages/coding-agent/package.json
 +++ b/packages/coding-agent/package.json
-@@ -1,13 +1,25 @@
+@@ -1,13 +1,26 @@
  {
 -	"name": "@earendil-works/pi-coding-agent",
 -	"version": "0.80.7",
@@ -9,6 +9,7 @@ diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.
 +	"name": "bangboo",
 +	"version": "0.1.1",
 +	"description": "Bangboo coding agent CLI with a Pi-compatible extension runtime",
++	"repository": { "type": "git", "url": "git+https://github.com/Yaphet2015/bangboo.git" },
  	"type": "module",
  	"piConfig": {
 -		"configDir": ".pi"
