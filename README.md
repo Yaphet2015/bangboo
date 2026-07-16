@@ -2,7 +2,7 @@
 
 Bangboo is a branded terminal coding agent distributed as the `bangboo` npm CLI. Its agent loop, model providers, terminal UI, session format, and extension loader are built from a pinned Pi-compatible runtime while Bangboo keeps its own product identity and data directories.
 
-The initial release is Bangboo `0.1.0`, built from runtime `0.80.7` at upstream tag `v0.80.7` and commit `818d67457cdd6b60bce6b121d16b23141c252dd8`.
+The current release is Bangboo `0.1.1`, built from runtime `0.80.7` at upstream tag `v0.80.7` and commit `818d67457cdd6b60bce6b121d16b23141c252dd8`.
 
 ## Install
 
@@ -101,7 +101,7 @@ npm install
 npm test
 npm run stage       # checkout and validate patches
 npm run build       # compile the complete runtime
-npm run pack        # create artifacts/bangboo-0.1.0.tgz
+npm run pack        # create artifacts/bangboo-0.1.1.tgz
 npm run verify
 ```
 

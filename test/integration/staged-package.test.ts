@@ -20,7 +20,7 @@ describe("staged Bangboo package", () => {
 
     expect(manifest).toMatchObject({
       name: "bangboo",
-      version: "0.1.0",
+      version: "0.1.1",
       bin: { bangboo: "dist/bangboo.js" },
       piConfig: { name: "bangboo", configDir: ".bangboo" },
       pi: { extensions: [], skills: [], prompts: [], themes: [] },

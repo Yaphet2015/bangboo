@@ -143,9 +143,12 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
     version?: string;
     bangboo?: { runtimeVersion?: string; upstreamCommit?: string };
   };
+  const distributionManifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as {
+    version?: string;
+  };
   if (
     bangbooManifest.name !== "bangboo" ||
-    bangbooManifest.version !== "0.1.0" ||
+    bangbooManifest.version !== distributionManifest.version ||
     bangbooManifest.bangboo?.runtimeVersion !== lock.codingAgent.version ||
     bangbooManifest.bangboo.upstreamCommit !== lock.commit
   ) {

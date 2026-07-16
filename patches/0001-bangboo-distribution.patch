@@ -7,7 +7,7 @@ diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.
 -	"version": "0.80.7",
 -	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 +	"name": "bangboo",
-+	"version": "0.1.0",
++	"version": "0.1.1",
 +	"description": "Bangboo coding agent CLI with a Pi-compatible extension runtime",
  	"type": "module",
  	"piConfig": {

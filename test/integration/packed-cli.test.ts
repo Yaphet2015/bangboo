@@ -18,7 +18,7 @@ describe("packed Bangboo CLI", () => {
   beforeAll(async () => {
     const pack = resolveNpmCommand(["run", "pack"]);
     await execFileAsync(pack.command, pack.args, { cwd: repositoryRoot, timeout: packTimeout });
-    const archives = (await readdir(join(repositoryRoot, "artifacts"))).filter((name) => name === "bangboo-0.1.0.tgz");
+    const archives = (await readdir(join(repositoryRoot, "artifacts"))).filter((name) => name === "bangboo-0.1.1.tgz");
     expect(archives).toHaveLength(1);
     installRoot = await mkdtemp(join(tmpdir(), "bangboo-install-"));
     const install = resolveNpmCommand([
@@ -59,6 +59,6 @@ describe("packed Bangboo CLI", () => {
       env: { ...process.env, BANGBOO_OFFLINE: "1" },
       timeout: 30_000,
     });
-    expect(stdout.trim()).toBe("bangboo 0.1.0 (runtime 0.80.7, upstream v0.80.7)");
+    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.80.7, upstream v0.80.7)");
   });
 });
