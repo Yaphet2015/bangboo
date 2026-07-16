@@ -44,6 +44,6 @@ jobs:
           archive="artifacts/bangboo-${version#v}.tgz"
           test -f "$archive"
           npm run smoke:tarball -- "$archive"
-          npm publish "$archive" --access public --provenance
+          npm publish "./$archive" --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
