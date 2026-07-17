@@ -63,6 +63,8 @@ describe("staged Bangboo package", () => {
     expect(source).toContain('"zai"');
     expect(source).toContain('"zai-coding-cn"');
     expect(source).toContain('windowLabel: "weekly"');
+    expect(source).toContain('"https://chatgpt.com/backend-api/wham/usage"');
+    expect(source).toContain("parseCodexUsage");
   });
 
   test("does not offer upstream telemetry controls", async () => {

@@ -76,10 +76,10 @@ index 5083e60f..d912eee5 100644
  			type: "model_select",
 diff --git a/packages/coding-agent/src/core/provider-usage.ts b/packages/coding-agent/src/core/provider-usage.ts
 new file mode 100644
-index 00000000..6296fd98
+index 00000000..135b59c7
 --- /dev/null
 +++ b/packages/coding-agent/src/core/provider-usage.ts
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,183 @@
 +export interface ProviderUsage {
 +	remainingPercent: number;
 +	windowLabel: string;
@@ -87,8 +87,13 @@ index 00000000..6296fd98
 +
 +type HeaderMap = Record<string, string | undefined>;
 +type FetchResponse = { ok: boolean; json(): Promise<unknown> };
-+type FetchFunction = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<FetchResponse>;
++type FetchFunction = (
++	url: string,
++	init: { headers: Record<string, string>; signal: AbortSignal },
++) => Promise<FetchResponse>;
 +
++const CODEX_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
++const WEEK_SECONDS = 604_800;
 +const SUPPORTED_PROVIDERS = new Set(["openai-codex", "zai", "zai-coding-cn"]);
 +const ZAI_ENDPOINTS: Record<string, string> = {
 +	zai: "https://api.z.ai/api/monitor/usage/quota/limit",
@@ -96,7 +101,8 @@ index 00000000..6296fd98
 +};
 +
 +function finiteNumber(value: unknown): number | undefined {
-+	const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
++	const number =
++		typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
 +	return Number.isFinite(number) ? number : undefined;
 +}
 +
@@ -109,6 +115,26 @@ index 00000000..6296fd98
 +	const windowMinutes = finiteNumber(headers["x-codex-secondary-window-minutes"]);
 +	if (used === undefined || windowMinutes !== 10_080) return undefined;
 +	return { remainingPercent: normalizePercent(100 - used), windowLabel: "weekly" };
++}
++
++export function parseCodexUsage(payload: unknown): ProviderUsage | undefined {
++	if (!payload || typeof payload !== "object") return undefined;
++	const rateLimit = (payload as { rate_limit?: unknown }).rate_limit;
++	if (!rateLimit || typeof rateLimit !== "object") return undefined;
++	const windows = [
++		(rateLimit as { primary_window?: unknown }).primary_window,
++		(rateLimit as { secondary_window?: unknown }).secondary_window,
++	];
++	for (const value of windows) {
++		if (!value || typeof value !== "object") continue;
++		const window = value as Record<string, unknown>;
++		const used = finiteNumber(window.used_percent);
++		const seconds = finiteNumber(window.limit_window_seconds);
++		if (used !== undefined && seconds === WEEK_SECONDS) {
++			return { remainingPercent: normalizePercent(100 - used), windowLabel: "weekly" };
++		}
++	}
++	return undefined;
 +}
 +
 +function formatWindow(numberValue: unknown, unitValue: unknown): string | undefined {
@@ -192,7 +218,8 @@ index 00000000..6296fd98
 +	refreshSelectedProvider(): Promise<void> {
 +		if (this.inFlight) return this.inFlight;
 +		const provider = this.selectedProvider;
-+		const endpoint = provider ? ZAI_ENDPOINTS[provider] : undefined;
++		const endpoint =
++			provider === "openai-codex" ? CODEX_USAGE_ENDPOINT : provider ? ZAI_ENDPOINTS[provider] : undefined;
 +		if (!provider || !endpoint) return Promise.resolve();
 +		const operation = (async () => {
 +			try {
@@ -207,7 +234,8 @@ index 00000000..6296fd98
 +						signal: controller.signal,
 +					});
 +					if (!response.ok) return;
-+					const usage = parseZaiUsage(await response.json());
++					const payload = await response.json();
++					const usage = provider === "openai-codex" ? parseCodexUsage(payload) : parseZaiUsage(payload);
 +					if (!usage) return;
 +					this.cache.set(provider, usage);
 +					if (provider === this.selectedProvider) this.publish(usage);
@@ -295,50 +323,96 @@ index e5b4491c..5b2a13b7 100644
  				if (this.settingsManager.getShowTerminalProgress()) {
 diff --git a/packages/coding-agent/test/provider-usage.test.ts b/packages/coding-agent/test/provider-usage.test.ts
 new file mode 100644
-index 00000000..34846a15
+index 00000000..920ce51a
 --- /dev/null
 +++ b/packages/coding-agent/test/provider-usage.test.ts
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,198 @@
 +import { describe, expect, test, vi } from "vitest";
 +import {
 +	applyProviderUsageStatus,
++	ProviderUsageTracker,
++	parseCodexUsage,
 +	parseCodexWeeklyUsage,
 +	parseZaiUsage,
-+	ProviderUsageTracker,
 +} from "../src/core/provider-usage.ts";
 +
 +describe("provider usage parsing", () => {
 +	test("converts Codex weekly used percentage to remaining percentage", () => {
-+		expect(parseCodexWeeklyUsage({
-+			"x-codex-secondary-used-percent": "28.4",
-+			"x-codex-secondary-window-minutes": "10080",
-+		})).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
++		expect(
++			parseCodexWeeklyUsage({
++				"x-codex-secondary-used-percent": "28.4",
++				"x-codex-secondary-window-minutes": "10080",
++			}),
++		).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
 +	});
 +
 +	test("ignores malformed and non-weekly Codex limits", () => {
-+		expect(parseCodexWeeklyUsage({
-+			"x-codex-secondary-used-percent": "28",
-+			"x-codex-secondary-window-minutes": "300",
-+		})).toBeUndefined();
++		expect(
++			parseCodexWeeklyUsage({
++				"x-codex-secondary-used-percent": "28",
++				"x-codex-secondary-window-minutes": "300",
++			}),
++		).toBeUndefined();
 +		expect(parseCodexWeeklyUsage({ "x-codex-secondary-used-percent": "nope" })).toBeUndefined();
 +	});
 +
++	test("parses Codex primary weekly usage returned by the usage endpoint", () => {
++		expect(
++			parseCodexUsage({
++				rate_limit: {
++					primary_window: { used_percent: 13, limit_window_seconds: 604_800 },
++					secondary_window: null,
++				},
++			}),
++		).toEqual({ remainingPercent: 87, windowLabel: "weekly" });
++	});
++
++	test("falls back to a Codex secondary weekly usage window", () => {
++		expect(
++			parseCodexUsage({
++				rate_limit: {
++					primary_window: { used_percent: 20, limit_window_seconds: 18_000 },
++					secondary_window: { used_percent: 28.4, limit_window_seconds: 604_800 },
++				},
++			}),
++		).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
++	});
++
++	test("ignores malformed and non-weekly Codex usage windows", () => {
++		expect(
++			parseCodexUsage({
++				rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18_000 } },
++			}),
++		).toBeUndefined();
++		expect(
++			parseCodexUsage({
++				rate_limit: { primary_window: { used_percent: "nope", limit_window_seconds: 604_800 } },
++			}),
++		).toBeUndefined();
++	});
++
 +	test("parses Z.AI remaining percentage and actual window", () => {
-+		expect(parseZaiUsage({
-+			data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, remainingPercentage: 71.6 }] },
-+		})).toEqual({ remainingPercent: 72, windowLabel: "5h" });
++		expect(
++			parseZaiUsage({
++				data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, remainingPercentage: 71.6 }] },
++			}),
++		).toEqual({ remainingPercent: 72, windowLabel: "5h" });
 +	});
 +
 +	test("derives and clamps Z.AI remaining percentage from consumed percentage", () => {
-+		expect(parseZaiUsage({
-+			data: { limits: [{ type: "TOKENS_LIMIT", unit: "day", number: 7, percentage: 101 }] },
-+		})).toEqual({ remainingPercent: 0, windowLabel: "7d" });
++		expect(
++			parseZaiUsage({
++				data: { limits: [{ type: "TOKENS_LIMIT", unit: "day", number: 7, percentage: 101 }] },
++			}),
++		).toEqual({ remainingPercent: 0, windowLabel: "7d" });
 +	});
 +
 +	test("recognizes Z.AI's weekly quota encoding", () => {
-+		expect(parseZaiUsage({
-+			data: { limits: [{ type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 28 }] },
-+		})).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
++		expect(
++			parseZaiUsage({
++				data: { limits: [{ type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 28 }] },
++			}),
++		).toEqual({ remainingPercent: 72, windowLabel: "weekly" });
 +	});
 +});
 +
@@ -359,12 +433,54 @@ index 00000000..34846a15
 +		expect(statuses).toEqual([undefined, "(72% weekly)", undefined, undefined]);
 +	});
 +
++	test("refreshes Codex usage after a settled-provider refresh", async () => {
++		const statuses: Array<string | undefined> = [];
++		const fetchFn = vi.fn().mockResolvedValue({
++			ok: true,
++			json: async () => ({
++				rate_limit: { primary_window: { used_percent: 13, limit_window_seconds: 604_800 } },
++			}),
++		});
++		const tracker = new ProviderUsageTracker({
++			fetchFn,
++			getApiKey: async () => "oauth-token",
++			onStatus: (text) => statuses.push(text),
++		});
++		tracker.selectProvider("openai-codex");
++		await tracker.refreshSelectedProvider();
++		expect(statuses).toEqual([undefined, "(87% weekly)"]);
++		expect(fetchFn).toHaveBeenCalledWith(
++			"https://chatgpt.com/backend-api/wham/usage",
++			expect.objectContaining({ headers: { Authorization: "Bearer oauth-token" } }),
++		);
++	});
++
++	test("preserves valid Codex status after a usage endpoint failure", async () => {
++		const statuses: Array<string | undefined> = [];
++		const tracker = new ProviderUsageTracker({
++			fetchFn: vi.fn().mockRejectedValue(new Error("offline")),
++			getApiKey: async () => "oauth-token",
++			onStatus: (text) => statuses.push(text),
++		});
++		tracker.selectProvider("openai-codex");
++		tracker.handleResponse("openai-codex", {
++			"x-codex-secondary-used-percent": "28",
++			"x-codex-secondary-window-minutes": "10080",
++		});
++		await tracker.refreshSelectedProvider();
++		expect(statuses).toEqual([undefined, "(72% weekly)"]);
++	});
++
 +	test("refreshes Z.AI and preserves valid status after transient failure", async () => {
 +		const statuses: Array<string | undefined> = [];
-+		const fetchFn = vi.fn()
-+			.mockResolvedValueOnce({ ok: true, json: async () => ({
-+				data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 28 }] },
-+			}) })
++		const fetchFn = vi
++			.fn()
++			.mockResolvedValueOnce({
++				ok: true,
++				json: async () => ({
++					data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 28 }] },
++				}),
++			})
 +			.mockRejectedValueOnce(new Error("offline"));
 +		const tracker = new ProviderUsageTracker({
 +			fetchFn,
@@ -382,8 +498,13 @@ index 00000000..34846a15
 +	});
 +
 +	test("deduplicates concurrent Z.AI refreshes", async () => {
-+		let resolveFetch!: (value: unknown) => void;
-+		const fetchFn = vi.fn(() => new Promise((resolve) => (resolveFetch = resolve)));
++		let resolveFetch!: (value: { ok: boolean; json(): Promise<unknown> }) => void;
++		const fetchFn = vi.fn(
++			() =>
++				new Promise<{ ok: boolean; json(): Promise<unknown> }>((resolve) => {
++					resolveFetch = resolve;
++				}),
++		);
 +		const tracker = new ProviderUsageTracker({ fetchFn, getApiKey: async () => "secret", onStatus: () => {} });
 +		tracker.selectProvider("zai-coding-cn");
 +		const first = tracker.refreshSelectedProvider();

@@ -3,6 +3,7 @@
 ## 0.1.1
 
 - Added footer reporting for remaining Codex weekly quota and actual-window Z.AI Coding Plan quota.
+- Fixed Codex quota reporting for the default WebSocket transport by refreshing the authenticated weekly usage endpoint through Bangboo's existing system-proxy-aware fetch path.
 
 ## 0.1.0
 
