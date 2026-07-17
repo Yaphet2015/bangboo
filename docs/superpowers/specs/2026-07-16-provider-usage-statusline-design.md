@@ -38,9 +38,7 @@ The module remains independent from footer layout. The existing footer continues
 
 ### OpenAI Codex
 
-After an `openai-codex` provider response, inspect the normalized response headers. Select the secondary/weekly Codex limit when its advertised window is one week. Convert `used-percent` to remaining percentage with `100 - usedPercent`.
-
-Do not issue a separate Codex usage request. If the expected weekly headers are absent or invalid, leave the previous valid Codex value unchanged during that provider selection.
+The Codex data flow in this original design is superseded by [`2026-07-17-codex-websocket-quota-design.md`](./2026-07-17-codex-websocket-quota-design.md). The original response-header path did not cover the default WebSocket transport because WebSocket responses do not invoke the provider `onResponse` callback, and a live handshake probe confirmed that the upgrade response contains no `x-codex-*` quota headers.
 
 ### Z.AI Coding Plans
 
