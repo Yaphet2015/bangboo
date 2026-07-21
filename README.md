@@ -86,6 +86,10 @@ Bangboo intentionally retains the Pi community package ABI. Existing packages co
 
 Extensions execute arbitrary code with the current user's permissions, and skills can instruct the model to run commands. Review third-party packages before installing them.
 
+Bangboo redirects the Pi-compatible config entry points it supports (`PI_CODING_AGENT_DIR`, `pi-subagents`' package-root and binary hints, and the runtime `CONFIG_DIR_NAME`) to `~/.bangboo/agent` and project `.bangboo/`, so supported community packages read Bangboo's directories instead of falling back to `~/.pi`. This does not create a symlink or migrate existing `~/.pi` data.
+
+On first `bangboo install`, Bangboo performs a read-only scan of the installed package for hardcoded `.pi` paths that would bypass this compatibility layer. If found, it prints a non-blocking notice listing the affected files. The scan does not modify the package, block installation, or constitute a security audit or compatibility guarantee. `bangboo update` does not rescan.
+
 ## Privacy and online services
 
 Bangboo does not send Pi product telemetry, use Pi update endpoints, or configure a default session-sharing service. Version checks query only the npm registry entry for `bangboo`. `/share` remains disabled until `BANGBOO_SHARE_VIEWER_URL` is set. Provider requests and community extensions remain subject to their own privacy policies.
