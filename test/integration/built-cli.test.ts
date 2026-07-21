@@ -215,4 +215,28 @@ describe("built Bangboo CLI", () => {
     expect(removed.stdout).toContain(`Removed ${fixture}`);
     expect((await runCli(["list", "--approve"], project, home)).stdout).not.toContain(fixture);
   }, 120_000);
+
+  test("warns on first install when a package hardcodes .pi", async () => {
+    const home = await mkdtemp(join(tmpdir(), "bangboo-scan-home-"));
+    const project = await mkdtemp(join(tmpdir(), "bangboo-scan-project-"));
+    const fixture = await mkdtemp(join(tmpdir(), "bangboo-hardcoded-"));
+    await cp(join(repositoryRoot, "test", "fixtures", "packages", "hardcoded-pi"), fixture, { recursive: true });
+
+    const result = await runCli(["install", fixture, "-l", "--approve"], project, home);
+    expect(result.stdout).toContain(`Installed ${fixture}`);
+    const combined = `${result.stdout}\n${result.stderr}`;
+    expect(combined).toContain("Compatibility notice");
+    expect(combined).toContain("extensions/index.ts:4:");
+  }, 120_000);
+
+  test("does not warn when installing the safe conventional fixture", async () => {
+    const home = await mkdtemp(join(tmpdir(), "bangboo-safe-home-"));
+    const project = await mkdtemp(join(tmpdir(), "bangboo-safe-project-"));
+    const fixture = await mkdtemp(join(tmpdir(), "bangboo-safe-pkg-"));
+    await cp(join(packageFixtures, "conventional"), fixture, { recursive: true });
+
+    const result = await runCli(["install", fixture, "-l", "--approve"], project, home);
+    const combined = `${result.stdout}\n${result.stderr}`;
+    expect(combined).not.toContain("Compatibility notice");
+  }, 120_000);
 });

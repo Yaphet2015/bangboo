@@ -1,0 +1,8 @@
+{
+  "name": "hardcoded-pi-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}
