@@ -1,0 +1,448 @@
+diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
+index ca6ee52b..191d2c59 100644
+--- a/packages/coding-agent/package.json
++++ b/packages/coding-agent/package.json
+@@ -35,6 +35,7 @@
+ 	},
+ 	"files": [
+ 		"dist",
++		"pi-compat",
+ 		"docs",
+ 		"examples",
+ 		"containerization.md",
+diff --git a/packages/coding-agent/pi-compat/package.json b/packages/coding-agent/pi-compat/package.json
+new file mode 100644
+index 00000000..98f16447
+--- /dev/null
++++ b/packages/coding-agent/pi-compat/package.json
+@@ -0,0 +1,15 @@
++{
++  "name": "@earendil-works/pi-coding-agent",
++  "version": "0.0.0-compat",
++  "private": true,
++  "description": "Bangboo compatibility facade for Pi plugins that probe the coding-agent package identity.",
++  "type": "module",
++  "main": "../dist/index.js",
++  "bin": {
++    "pi": "../dist/bangboo.js"
++  },
++  "piConfig": {
++    "name": "pi",
++    "configDir": ".bangboo"
++  }
++}
+diff --git a/packages/coding-agent/src/bangboo.ts b/packages/coding-agent/src/bangboo.ts
+index 1ceab76b..7d5874fb 100644
+--- a/packages/coding-agent/src/bangboo.ts
++++ b/packages/coding-agent/src/bangboo.ts
+@@ -1,5 +1,9 @@
+ #!/usr/bin/env node
+ 
++import { realpathSync } from "node:fs";
++import { getAgentDir } from "./config.ts";
++import { applyPiCompatEnv } from "./pi-compat-env.ts";
++
+ const compatibilityVariables = [
+ 	"OFFLINE",
+ 	"SHARE_VIEWER_URL",
+@@ -23,4 +27,16 @@ process.env.BANGBOO_CODING_AGENT = "true";
+ process.env.PI_CODING_AGENT = "true";
+ process.env.PI_TELEMETRY = "0";
+ 
++let bangbooCliEntry: string | undefined;
++try {
++	if (process.argv[1]) bangbooCliEntry = realpathSync(process.argv[1]);
++} catch {
++	// Best-effort entry resolution.
++}
++applyPiCompatEnv({
++	agentDir: getAgentDir(),
++	sessionDir: process.env.BANGBOO_CODING_AGENT_SESSION_DIR,
++	cliEntry: bangbooCliEntry,
++});
++
+ await import("./cli.ts");
+diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
+index 252234b0..16ad735c 100644
+--- a/packages/coding-agent/src/package-manager-cli.ts
++++ b/packages/coding-agent/src/package-manager-cli.ts
+@@ -23,6 +23,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
+ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+ import { spawnProcess } from "./utils/child-process.ts";
+ import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
++import { scanPackageForHardcodedPi } from "./utils/plugin-compatibility-scan.ts";
+ import {
+ 	cleanupWindowsSelfUpdateQuarantine,
+ 	quarantineWindowsNativeDependencies,
+@@ -74,6 +75,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
+ 	}
+ }
+ 
++async function scanInstalledPackageCompatibility(
++	packageManager: DefaultPackageManager,
++	source: string,
++	local: boolean,
++): Promise<void> {
++	const scope = local ? "project" : "user";
++	let installedPath: string | undefined;
++	try {
++		installedPath = packageManager.getInstalledPath(source, scope) ?? undefined;
++	} catch {
++		installedPath = undefined;
++	}
++	// 本地单文件扩展没有安装副本，直接扫描源文件本身。
++	if (!installedPath && (source.startsWith("/") || source.startsWith("./"))) {
++		try {
++			const fsStat = await import("node:fs/promises").then((m) => m.stat(source));
++			installedPath = fsStat.isFile() ? source : undefined;
++		} catch {
++			installedPath = undefined;
++		}
++	}
++	if (!installedPath) return;
++
++	let result;
++	try {
++		result = await scanPackageForHardcodedPi(installedPath);
++	} catch {
++		console.warn(
++			chalk.yellow(
++				`Could not complete compatibility scan for ${source}. The package is installed, but Bangboo could not read all of its files.`,
++			),
++		);
++		return;
++	}
++	if (!result.complete) {
++		console.warn(
++			chalk.yellow(`Compatibility scan for ${source} was incomplete; the package is installed.`),
++		);
++		return;
++	}
++	if (result.totalMatches === 0) return;
++
++	console.warn(
++		chalk.yellow(
++			`\nCompatibility notice for ${source}:\nBangboo redirects supported Pi config lookups to ~/.bangboo, but this package hardcodes .pi in ${String(result.totalMatches)} place(s). It may read or write ~/.pi or a project .pi/ directory instead of Bangboo's directories. Consider reporting this to the package author and asking them to use CONFIG_DIR_NAME, the runtime config API, or PI_CODING_AGENT_DIR.`,
++		),
++	);
++	for (const finding of result.findings) {
++		console.warn(chalk.yellow(`  ${finding.path}:${finding.line}:${finding.column}`));
++	}
++	if (result.totalMatches > result.findings.length) {
++		console.warn(
++			chalk.yellow(`  ...and ${String(result.totalMatches - result.findings.length)} more.`),
++		);
++	}
++	console.warn("");
++}
++
+ function getPackageCommandUsage(command: PackageCommand): string {
+ 	switch (command) {
+ 		case "install":
+@@ -705,6 +764,7 @@ export async function handlePackageCommand(
+ 			case "install":
+ 				await packageManager.installAndPersist(source!, { local: options.local });
+ 				console.log(chalk.green(`Installed ${source}`));
++				await scanInstalledPackageCompatibility(packageManager, source!, Boolean(options.local));
+ 				return true;
+ 
+ 			case "remove": {
+diff --git a/packages/coding-agent/src/pi-compat-env.ts b/packages/coding-agent/src/pi-compat-env.ts
+new file mode 100644
+index 00000000..b9a6561c
+--- /dev/null
++++ b/packages/coding-agent/src/pi-compat-env.ts
+@@ -0,0 +1,36 @@
++import { existsSync as nodeExistsSync } from "node:fs";
++import { dirname, join, resolve } from "node:path";
++
++export interface ApplyPiCompatEnvOptions {
++	/** Bangboo agent directory (e.g. ~/.bangboo/agent). */
++	agentDir: string;
++	/** Optional Bangboo session directory override. */
++	sessionDir?: string;
++	/** Absolute path to the Bangboo CLI entry (process.argv[1] after realpath). */
++	cliEntry?: string;
++	/** Injected for tests; defaults to node:fs existsSync. */
++	existsSync?: (path: string) => boolean;
++}
++
++/**
++ * Redirect Pi-compatible plugins to Bangboo's config directories. Bangboo
++ * values always win over inherited PI_* variables so plugins never fall back
++ * to ~/.pi. The user-dir override is general; the package-root + binary hints
++ * cover pi-subagents' config-dir resolution and child-process spawn.
++ */
++export function applyPiCompatEnv(options: ApplyPiCompatEnvOptions): void {
++	const { agentDir, sessionDir, cliEntry } = options;
++	const existsSync = options.existsSync ?? nodeExistsSync;
++
++	process.env.PI_CODING_AGENT_DIR = agentDir;
++	if (sessionDir) {
++		process.env.PI_CODING_AGENT_SESSION_DIR = sessionDir;
++	}
++
++	if (!cliEntry) return;
++	process.env.PI_SUBAGENT_PI_BINARY = cliEntry;
++	const compatRoot = resolve(dirname(cliEntry), "..", "pi-compat");
++	if (existsSync(join(compatRoot, "package.json"))) {
++		process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT = compatRoot;
++	}
++}
+diff --git a/packages/coding-agent/src/utils/plugin-compatibility-scan.ts b/packages/coding-agent/src/utils/plugin-compatibility-scan.ts
+new file mode 100644
+index 00000000..c12ba0f2
+--- /dev/null
++++ b/packages/coding-agent/src/utils/plugin-compatibility-scan.ts
+@@ -0,0 +1,112 @@
++import { readdir, readFile, stat } from "node:fs/promises";
++import { join, relative } from "node:path";
++
++export interface CompatibilityFinding {
++	path: string;
++	line: number;
++	column: number;
++	excerpt: string;
++}
++export interface CompatibilityScanResult {
++	findings: CompatibilityFinding[];
++	totalMatches: number;
++	complete: boolean;
++}
++
++const SOURCE_EXTENSIONS = new Set([
++	".ts", ".tsx", ".mts", ".cts",
++	".js", ".jsx", ".mjs", ".cjs",
++	".sh", ".py",
++]);
++const SKIP_DIRS = new Set([
++	"node_modules", ".git", ".cache", "dist", "build", "build-output",
++	"coverage", ".next", ".turbo", ".bangboo-build",
++]);
++const SKIP_NAME_PREFIXES = /^(?:readme|changelog|license|licence|notice|contributing|code_of_conduct)/i;
++const SKIP_SUFFIXES = /\.(?:map|md|markdown|txt|json|lock|log)$/i;
++
++// Matches `.pi` only when it is a path segment or a quoted string literal,
++// never `.pi-subagents`, `.pion`, `config.pi`, `PI_...`, or `pi.dev`.
++const HARDCODED_PI = /(?:^|[^A-Za-z0-9._-])\.pi(?=[\\/"'`]|$)/gu;
++
++function truncateExcerpt(line: string): string {
++	const trimmed = line.trim();
++	return trimmed.length > 100 ? `${trimmed.slice(0, 97)}...` : trimmed;
++}
++
++async function scanFile(
++	filePath: string,
++	root: string,
++	maxFindings: number,
++	findings: CompatibilityFinding[],
++): Promise<number> {
++	let content: string;
++	try {
++		content = await readFile(filePath, "utf8");
++	} catch {
++		return 0;
++	}
++	const rel = relative(root, filePath);
++	let matches = 0;
++	const lines = content.split(/\r?\n/u);
++	for (let i = 0; i < lines.length; i++) {
++		HARDCODED_PI.lastIndex = 0;
++		const line = lines[i];
++		let match: RegExpExecArray | null;
++		while ((match = HARDCODED_PI.exec(line)) !== null) {
++			matches++;
++			if (findings.length < maxFindings) {
++				findings.push({
++					path: rel,
++					line: i + 1,
++					column: match.index + 1,
++					excerpt: truncateExcerpt(line),
++				});
++			}
++		}
++	}
++	return matches;
++}
++
++export async function scanPackageForHardcodedPi(
++	root: string,
++	options?: { maxFindings?: number },
++): Promise<CompatibilityScanResult> {
++	const maxFindings = options?.maxFindings ?? 5;
++	const findings: CompatibilityFinding[] = [];
++	let totalMatches = 0;
++	let complete = true;
++
++	async function walk(dir: string): Promise<void> {
++		let entries: string[];
++		try {
++			entries = await readdir(dir);
++		} catch {
++			complete = false;
++			return;
++		}
++		await Promise.all(entries.map(async (name) => {
++			if (SKIP_NAME_PREFIXES.test(name) || SKIP_SUFFIXES.test(name)) return;
++			const child = join(dir, name);
++			let s;
++			try {
++				s = await stat(child);
++			} catch {
++				complete = false;
++				return;
++			}
++			if (s.isDirectory()) {
++				if (SKIP_DIRS.has(name)) return;
++				await walk(child);
++			} else if (s.isFile()) {
++				const dot = name.lastIndexOf(".");
++				const ext = dot === -1 ? "" : name.slice(dot).toLowerCase();
++				if (!SOURCE_EXTENSIONS.has(ext)) return;
++				totalMatches += await scanFile(child, root, maxFindings, findings);
++			}
++		}));
++	}
++
++	await walk(root);
++	return { findings, totalMatches, complete };
++}
+diff --git a/packages/coding-agent/test/pi-compat-env.test.ts b/packages/coding-agent/test/pi-compat-env.test.ts
+new file mode 100644
+index 00000000..e9dcc64d
+--- /dev/null
++++ b/packages/coding-agent/test/pi-compat-env.test.ts
+@@ -0,0 +1,44 @@
++import { afterEach, describe, expect, test } from "vitest";
++import { applyPiCompatEnv } from "../src/pi-compat-env.ts";
++
++afterEach(() => {
++	delete process.env.PI_CODING_AGENT_DIR;
++	delete process.env.PI_CODING_AGENT_SESSION_DIR;
++	delete process.env.PI_SUBAGENT_PI_BINARY;
++	delete process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT;
++});
++
++describe("applyPiCompatEnv", () => {
++	test("redirects PI_CODING_AGENT_DIR and overrides any stale value", () => {
++		process.env.PI_CODING_AGENT_DIR = "/old/.pi/agent";
++		applyPiCompatEnv({ agentDir: "/home/u/.bangboo/agent" });
++		expect(process.env.PI_CODING_AGENT_DIR).toBe("/home/u/.bangboo/agent");
++	});
++
++	test("sets the pi-subagents binary hint when a cli entry is provided", () => {
++		applyPiCompatEnv({ agentDir: "/a", cliEntry: "/pkg/dist/bangboo.js" });
++		expect(process.env.PI_SUBAGENT_PI_BINARY).toBe("/pkg/dist/bangboo.js");
++	});
++
++	test("points pi-subagents package root at the pi-compat facade when present", () => {
++		const exists = (p: string) => p === "/pkg/pi-compat/package.json";
++		applyPiCompatEnv({ agentDir: "/a", cliEntry: "/pkg/dist/bangboo.js", existsSync: exists });
++		expect(process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT).toBe("/pkg/pi-compat");
++	});
++
++	test("leaves session dir untouched when no Bangboo session override is given", () => {
++		applyPiCompatEnv({ agentDir: "/a" });
++		expect(process.env.PI_CODING_AGENT_SESSION_DIR).toBeUndefined();
++	});
++
++	test("forwards the Bangboo session override when provided", () => {
++		applyPiCompatEnv({ agentDir: "/a", sessionDir: "/custom/sessions" });
++		expect(process.env.PI_CODING_AGENT_SESSION_DIR).toBe("/custom/sessions");
++	});
++
++	test("omits binary/package-root hints when cli entry is absent", () => {
++		applyPiCompatEnv({ agentDir: "/a" });
++		expect(process.env.PI_SUBAGENT_PI_BINARY).toBeUndefined();
++		expect(process.env.PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT).toBeUndefined();
++	});
++});
+diff --git a/packages/coding-agent/test/pi-compat-facade.test.ts b/packages/coding-agent/test/pi-compat-facade.test.ts
+new file mode 100644
+index 00000000..28e6c4b7
+--- /dev/null
++++ b/packages/coding-agent/test/pi-compat-facade.test.ts
+@@ -0,0 +1,18 @@
++import { readFile } from "node:fs/promises";
++import { join } from "node:path";
++import { fileURLToPath } from "node:url";
++import { describe, expect, test } from "vitest";
++
++const packageRoot = fileURLToPath(new URL("../", import.meta.url));
++
++describe("pi-compat facade", () => {
++	test("declares the upstream coding-agent identity with bangboo config dir", async () => {
++		const manifest = JSON.parse(
++			await readFile(join(packageRoot, "pi-compat", "package.json"), "utf8"),
++		) as Record<string, unknown>;
++		expect(manifest.name).toBe("@earendil-works/pi-coding-agent");
++		expect((manifest.piConfig as { configDir: string }).configDir).toBe(".bangboo");
++		expect((manifest.bin as { pi: string }).pi).toBe("../dist/bangboo.js");
++		expect(manifest.main).toBe("../dist/index.js");
++	});
++});
+diff --git a/packages/coding-agent/test/plugin-compatibility-scan.test.ts b/packages/coding-agent/test/plugin-compatibility-scan.test.ts
+new file mode 100644
+index 00000000..aba52802
+--- /dev/null
++++ b/packages/coding-agent/test/plugin-compatibility-scan.test.ts
+@@ -0,0 +1,59 @@
++import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { describe, expect, test } from "vitest";
++import { scanPackageForHardcodedPi } from "../src/utils/plugin-compatibility-scan.ts";
++
++describe("scanPackageForHardcodedPi", () => {
++	test("flags hardcoded ~/.pi and string .pi path joins", async () => {
++		const root = await mkdtemp(join(tmpdir(), "scan-"));
++		await mkdir(join(root, "extensions"), { recursive: true });
++		await writeFile(
++			join(root, "extensions", "index.ts"),
++			`const a = join(homedir(), ".pi", "agent");\nconst b = "~/.pi/agent";\n`,
++			"utf8",
++		);
++		const result = await scanPackageForHardcodedPi(root);
++		expect(result.complete).toBe(true);
++		expect(result.totalMatches).toBe(2);
++		expect(result.findings).toHaveLength(2);
++		expect(result.findings[0].path).toBe("extensions/index.ts");
++		expect(result.findings[0].line).toBe(1);
++		expect(result.findings[0].excerpt).toContain('".pi"');
++	});
++
++	test("does not flag .pi-subagents, PI_CODING_AGENT_DIR, docs, node_modules, maps", async () => {
++		const root = await mkdtemp(join(tmpdir(), "scan-clean-"));
++		await mkdir(join(root, "node_modules", "x"), { recursive: true });
++		await mkdir(join(root, "docs"), { recursive: true });
++		await writeFile(join(root, "node_modules", "x", "y.js"), 'const p = "~/.pi";\n', "utf8");
++		await writeFile(join(root, "docs", "README.md"), "see ~/.pi/agent\n", "utf8");
++		await writeFile(
++			join(root, "ext.ts"),
++			`const dir = process.env.PI_CODING_AGENT_DIR;\nconst art = ".pi-subagents";\nconst m = "x.pi";\n`,
++			"utf8",
++		);
++		await writeFile(join(root, "built.js.map"), '{"sources":["~/.pi"]}\n', "utf8");
++		const result = await scanPackageForHardcodedPi(root);
++		expect(result.totalMatches).toBe(0);
++		expect(result.findings).toEqual([]);
++	});
++
++	test("caps findings and still reports total", async () => {
++		const root = await mkdtemp(join(tmpdir(), "scan-cap-"));
++		await mkdir(join(root, "s"), { recursive: true });
++		let file = "";
++		for (let i = 0; i < 8; i++) file += `const x${i} = "~/.pi";\n`;
++		await writeFile(join(root, "s", "a.ts"), file, "utf8");
++		const result = await scanPackageForHardcodedPi(root, { maxFindings: 3 });
++		expect(result.findings).toHaveLength(3);
++		expect(result.totalMatches).toBe(8);
++	});
++
++	test("reports incomplete when the root cannot be traversed", async () => {
++		const root = "__definitely_not_a_real_root__/missing";
++		const result = await scanPackageForHardcodedPi(root);
++		expect(result.complete).toBe(false);
++		expect(result.totalMatches).toBe(0);
++	});
++});

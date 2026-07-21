@@ -32,7 +32,12 @@ try {
 }
 
 const allowedByFile: Record<string, RegExp[]> = {
-  "package-manager-cli.ts": [/source === "pi"/u],
+  "package-manager-cli.ts": [
+    /source === "pi"/u,
+    // Intentional install-time compatibility warning that must reference .pi
+    // to be meaningful; it is a developer-facing notice, not product branding.
+    /Compatibility notice for/u,
+  ],
   "core/session-manager.ts": [/pi-generated/u, /~\/\.pi/u, /pi session/u],
   "main.ts": [/successful `pi update`/u],
   "modes/interactive/components/extension-editor.ts": [/pi-extension-editor/u],
