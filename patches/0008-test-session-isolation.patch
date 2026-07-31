@@ -1,0 +1,53 @@
+diff --git a/packages/coding-agent/test/config-dir-test-isolation.test.ts b/packages/coding-agent/test/config-dir-test-isolation.test.ts
+new file mode 100644
+index 00000000..27315bf7
+--- /dev/null
++++ b/packages/coding-agent/test/config-dir-test-isolation.test.ts
+@@ -0,0 +1,16 @@
++import { homedir } from "node:os";
++import { join } from "node:path";
++import { describe, expect, test } from "vitest";
++import { CONFIG_DIR_NAME, getAgentDir } from "../src/config.ts";
++
++// Regression guard for test-suite session leakage. Before the setupFiles
++// redirect existed, every test process resolved getAgentDir() to the user's
++// real ~/.<configDir>/agent and wrote sessions / auth / settings there. This
++// test fails the moment that isolation is lost again, regardless of brand.
++describe("test config-dir isolation", () => {
++	test("getAgentDir never resolves to the user's real home config dir", () => {
++		const agentDir = getAgentDir();
++		const realHomeAgentDir = join(homedir(), CONFIG_DIR_NAME, "agent");
++		expect(agentDir).not.toBe(realHomeAgentDir);
++	});
++});
+diff --git a/packages/coding-agent/test/setup-isolate-config-dir.ts b/packages/coding-agent/test/setup-isolate-config-dir.ts
+new file mode 100644
+index 00000000..0695c7f1
+--- /dev/null
++++ b/packages/coding-agent/test/setup-isolate-config-dir.ts
+@@ -0,0 +1,13 @@
++import { mkdtempSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { ENV_AGENT_DIR } from "../src/config.ts";
++
++// Tests must never read or write the user's real agent config dir
++// (~/.<configDir>/agent). Without this redirect, session / auth / settings /
++// models storage falls back to the user's home directory and leaks test
++// artifacts there. Point every test process at a throwaway temp dir instead.
++// Honors an externally supplied override so individual tests can opt out.
++if (!process.env[ENV_AGENT_DIR]) {
++	process.env[ENV_AGENT_DIR] = mkdtempSync(join(tmpdir(), "pi-test-config-"));
++}
+diff --git a/packages/coding-agent/vitest.config.ts b/packages/coding-agent/vitest.config.ts
+index 0582b7df..562567ed 100644
+--- a/packages/coding-agent/vitest.config.ts
++++ b/packages/coding-agent/vitest.config.ts
+@@ -10,6 +10,7 @@ const tuiSrcIndex = fileURLToPath(new URL("../tui/src/index.ts", import.meta.url
+ export default defineConfig({
+ 	test: {
+ 		globals: true,
++		setupFiles: ["./test/setup-isolate-config-dir.ts"],
+ 		environment: "node",
+ 		testTimeout: 30000,
+ 		reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],

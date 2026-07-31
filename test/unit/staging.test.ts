@@ -20,10 +20,10 @@ describe("buildStagingCommands", () => {
     ]);
   });
 
-  test("includes the provider usage statusline patch in order", async () => {
+  test("ends with the newest numbered patch", async () => {
     const patchDir = new URL("../../patches/", import.meta.url);
     const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
 
-    expect(patches.at(-1)).toBe("0007-plugin-config-compatibility.patch");
+    expect(patches.at(-1)).toBe("0008-test-session-isolation.patch");
   });
 });
