@@ -3,7 +3,12 @@ import { access, copyFile, mkdir, readFile, readdir, rm } from "node:fs/promises
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveNpmCommand } from "../src/npm-command.js";
-import { parseUpstreamLock } from "../src/upstream-lock.js";
+import {
+  hydrateModelData,
+  PI_AI_PACKAGE_NAME,
+  resolvePiAiPackageVersion,
+} from "../src/model-data-hydration.js";
+import { parseUpstreamLock, type UpstreamLock } from "../src/upstream-lock.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cacheDir = join(root, ".cache", "pi-upstream");
@@ -43,17 +48,22 @@ async function copyOwnedFile(name: string): Promise<void> {
   }
 }
 
-async function buildRuntimeDependencies(): Promise<void> {
+async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   if (runtimeDependenciesBuilt) return;
   await run("npm", ["run", "build"], join(stageDir, "packages", "tui"));
-  await run("npm", ["exec", "--offline", "--", "tsgo", "-p", "tsconfig.build.json"], join(stageDir, "packages", "ai"));
+  const aiPackageDir = join(stageDir, "packages", "ai");
+  await hydrateModelData({
+    packageName: PI_AI_PACKAGE_NAME,
+    packageVersion: resolvePiAiPackageVersion(lock.runtimePackages),
+    stagePackageDir: aiPackageDir,
+  });
+  await run("npm", ["run", "check:model-data"], aiPackageDir);
+  await run("npm", ["run", "build:offline"], aiPackageDir);
   await run("npm", ["run", "build"], join(stageDir, "packages", "agent"));
   runtimeDependenciesBuilt = true;
 }
 
-async function stage(installDependencies: boolean, testUpstream: boolean): Promise<void> {
-  const lock = parseUpstreamLock(await readFile(join(root, "upstream.lock.json"), "utf8"));
-
+async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstream: boolean): Promise<void> {
   await mkdir(dirname(cacheDir), { recursive: true });
   if (!(await exists(join(cacheDir, ".git")))) {
     await run("git", ["clone", "--filter=blob:none", "--no-checkout", lock.repository, cacheDir]);
@@ -88,7 +98,7 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
   // identity and path expectations. Bangboo-specific behavior is tested after
   // patching by the repository integration suite.
   if (testUpstream) {
-    await buildRuntimeDependencies();
+    await buildRuntimeDependencies(lock);
     // A few upstream fs.watch/process-drain tests can miss an event under a
     // saturated CI runner. Two per-test retries filter those timing flakes
     // while preserving the suite as a hard gate for deterministic failures.
@@ -101,7 +111,7 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
       testArguments.push("--exclude", "test/suite/regressions/5303-bash-output-truncation.test.ts");
     }
     if (process.platform === "win32") {
-      // These pristine v0.80.7 tests encode POSIX permissions, signals, paths,
+      // These pristine v0.83.0 tests encode POSIX permissions, signals, paths,
       // or glob semantics and fail consistently on GitHub's Windows runner.
       // Linux/macOS execute them; Windows still runs every other upstream file.
       // Serial execution avoids overlapping watcher fixture teardown.
@@ -156,8 +166,8 @@ async function stage(installDependencies: boolean, testUpstream: boolean): Promi
   }
 }
 
-async function build(): Promise<void> {
-  await buildRuntimeDependencies();
+async function build(lock: UpstreamLock): Promise<void> {
+  await buildRuntimeDependencies(lock);
   await run("npm", ["run", "build"], packageDir);
 }
 
@@ -170,8 +180,9 @@ async function pack(): Promise<void> {
 const argumentsSet = new Set(process.argv.slice(2));
 const shouldBuild = argumentsSet.has("--build") || argumentsSet.has("--pack");
 const shouldTestUpstream = argumentsSet.has("--upstream-test") || argumentsSet.has("--pack");
-await stage(shouldBuild || shouldTestUpstream, shouldTestUpstream);
-if (shouldBuild) await build();
+const lock = parseUpstreamLock(await readFile(join(root, "upstream.lock.json"), "utf8"));
+await stage(lock, shouldBuild || shouldTestUpstream, shouldTestUpstream);
+if (shouldBuild) await build(lock);
 if (argumentsSet.has("--pack")) await pack();
 
 console.log(`Bangboo staging ready at ${stageDir}`);

@@ -100,3 +100,28 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  	private handleDaxnuts(): void {
  		this.chatContainer.addChild(new Spacer(1));
  		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
+
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -853,8 +853,8 @@ export class InteractiveMode {
+ 			})
+ 			.finally(() => {
+ 				// On Windows, npm can overwrite the shared console title while checking
+-				// extension package versions. Restore Pi's title after the startup check.
++				// extension package versions. Restore Bangboo's title after the startup check.
+ 				if (process.platform === "win32" && this.isInitialized) {
+ 					this.updateTerminalTitle();
+ 				}
+ 			});
+@@ -5131,9 +5131,9 @@ export class InteractiveMode {
+ 			providerOption.name,
+ 			`${providerOption.name} setup`,
+ 		);
+-		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside pi.`, [], true);
++		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside Bangboo.`, [], true);
+ 
+ 		this.editorContainer.clear();
+ 		this.editorContainer.addChild(dialog);
+ 		this.ui.setFocus(dialog);
+ 		this.ui.requestRender();

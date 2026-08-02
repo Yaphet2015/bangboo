@@ -1,16 +1,15 @@
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index 5083e60f..d912eee5 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
-@@ -85,6 +85,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
- import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
- import type { ModelRegistry } from "./model-registry.ts";
+@@ -96,6 +96,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+ import { ModelRegistry } from "./model-registry.ts";
+ import type { ModelRuntime } from "./model-runtime.ts";
  import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 +import { ProviderUsageTracker } from "./provider-usage.ts";
  import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
  import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
  import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
-@@ -132,6 +133,7 @@ export type AgentSessionEvent =
+@@ -144,6 +145,7 @@ export type AgentSessionEvent =
  			willRetry: boolean;
  	  }
  	| { type: "agent_settled" }
@@ -18,28 +17,28 @@ index 5083e60f..d912eee5 100644
  	| {
  			type: "queue_update";
  			steering: readonly string[];
-@@ -327,6 +329,7 @@ export class AgentSession {
+@@ -360,6 +362,7 @@ export class AgentSession {
+ 	private _extensionErrorUnsubscriber?: () => void;
  
- 	// Model registry for API key resolution
- 	private _modelRegistry: ModelRegistry;
+ 	private _modelRuntime: ModelRuntime;
 +	private _providerUsageTracker: ProviderUsageTracker;
  
  	// Tool registry for extension getTools/setTools
  	private _toolRegistry: Map<string, AgentTool> = new Map();
-@@ -348,6 +351,11 @@ export class AgentSession {
+@@ -381,6 +384,11 @@ export class AgentSession {
  		this._customTools = config.customTools ?? [];
  		this._cwd = config.cwd;
- 		this._modelRegistry = config.modelRegistry;
+ 		this._modelRuntime = config.modelRuntime;
 +		this._providerUsageTracker = new ProviderUsageTracker({
-+			getApiKey: (provider) => this._modelRegistry.getApiKeyForProvider(provider),
++			getApiKey: (provider) => new ModelRegistry(this._modelRuntime).getApiKeyForProvider(provider),
 +			onStatus: (text) => this._emit({ type: "provider_usage", text }),
 +		});
 +		this._providerUsageTracker.selectProvider(this.agent.state.model?.provider);
  		this._extensionRunnerRef = config.extensionRunnerRef;
  		this._initialActiveToolNames = config.initialActiveToolNames;
  		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
-@@ -372,6 +380,11 @@ export class AgentSession {
- 		return this._modelRegistry;
+@@ -404,6 +412,11 @@ export class AgentSession {
+ 		return this._modelRuntime;
  	}
  
 +	/** Record provider response quota metadata without affecting the model request. */
@@ -48,9 +47,9 @@ index 5083e60f..d912eee5 100644
 +	}
 +
  	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
- 		apiKey: string;
+ 		apiKey?: string;
  		headers?: Record<string, string>;
-@@ -536,6 +549,7 @@ export class AgentSession {
+@@ -583,6 +596,7 @@ export class AgentSession {
  		try {
  			await this._extensionRunner.emit({ type: "agent_settled" });
  			this._emit({ type: "agent_settled" });
@@ -58,7 +57,7 @@ index 5083e60f..d912eee5 100644
  		} finally {
  			this._resolveIdleWaitIfIdle();
  		}
-@@ -810,6 +824,7 @@ export class AgentSession {
+@@ -848,6 +862,7 @@ export class AgentSession {
  		this._extensionRunner.invalidate(
  			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
  		);
@@ -66,7 +65,7 @@ index 5083e60f..d912eee5 100644
  		this._disconnectFromAgent();
  		this._eventListeners = [];
  		cleanupSessionResources(this.sessionId);
-@@ -1520,6 +1535,7 @@ export class AgentSession {
+@@ -1561,6 +1576,7 @@ export class AgentSession {
  		previousModel: Model<any> | undefined,
  		source: "set" | "cycle" | "restore",
  	): Promise<void> {
@@ -76,7 +75,6 @@ index 5083e60f..d912eee5 100644
  			type: "model_select",
 diff --git a/packages/coding-agent/src/core/provider-usage.ts b/packages/coding-agent/src/core/provider-usage.ts
 new file mode 100644
-index 00000000..135b59c7
 --- /dev/null
 +++ b/packages/coding-agent/src/core/provider-usage.ts
 @@ -0,0 +1,183 @@
@@ -264,7 +262,6 @@ index 00000000..135b59c7
 +	}
 +}
 diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
-index 4fc98670..deac6bc6 100644
 --- a/packages/coding-agent/src/core/sdk.ts
 +++ b/packages/coding-agent/src/core/sdk.ts
 @@ -251,6 +251,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
@@ -275,7 +272,7 @@ index 4fc98670..deac6bc6 100644
  
  	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
  	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-@@ -344,7 +345,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+@@ -335,7 +336,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
  			}
  			return runner.emitBeforeProviderRequest(payload);
  		},
@@ -285,7 +282,7 @@ index 4fc98670..deac6bc6 100644
  			const runner = extensionRunnerRef.current;
  			if (!runner?.hasHandlers("after_provider_response")) {
  				return;
-@@ -382,7 +384,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+@@ -373,7 +375,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
  		sessionManager.appendThinkingLevelChange(thinkingLevel);
  	}
  
@@ -295,18 +292,17 @@ index 4fc98670..deac6bc6 100644
  		sessionManager,
  		settingsManager,
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index e5b4491c..5b2a13b7 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -86,6 +86,7 @@ import { createCompactionSummaryMessage } from "../../core/messages.ts";
- import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+@@ -83,6 +83,7 @@ import {
+ 	resolveModelScopeWithDiagnostics,
+ } from "../../core/model-resolver.ts";
  import { DefaultPackageManager } from "../../core/package-manager.ts";
- import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 +import { applyProviderUsageStatus } from "../../core/provider-usage.ts";
  import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
  import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
  import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
-@@ -2805,6 +2806,14 @@ export class InteractiveMode {
+@@ -2831,6 +2832,14 @@ export class InteractiveMode {
  		this.footer.invalidate();
  
  		switch (event.type) {
@@ -323,7 +319,6 @@ index e5b4491c..5b2a13b7 100644
  				if (this.settingsManager.getShowTerminalProgress()) {
 diff --git a/packages/coding-agent/test/provider-usage.test.ts b/packages/coding-agent/test/provider-usage.test.ts
 new file mode 100644
-index 00000000..920ce51a
 --- /dev/null
 +++ b/packages/coding-agent/test/provider-usage.test.ts
 @@ -0,0 +1,198 @@

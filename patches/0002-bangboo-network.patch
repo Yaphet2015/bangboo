@@ -38,15 +38,15 @@ diff --git a/packages/coding-agent/src/core/provider-attribution.ts b/packages/c
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -91,7 +91,6 @@ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../cor
+@@ -88,7 +88,6 @@ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../cor
  import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
  import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
  import type { SourceInfo } from "../../core/source-info.ts";
 -import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
  import type { TruncationResult } from "../../core/tools/truncate.ts";
  import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
- import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
-@@ -99,7 +98,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
+ import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+@@ -97,7 +96,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
  import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
  import { parseGitUrl } from "../../utils/git.ts";
  import { getCwdRelativePath } from "../../utils/paths.ts";
@@ -54,7 +54,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  import { killTrackedDetachedChildren } from "../../utils/shell.ts";
  import { ensureTool } from "../../utils/tools-manager.ts";
  import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-@@ -1001,41 +999,20 @@ export class InteractiveMode {
+@@ -999,41 +997,20 @@ export class InteractiveMode {
  		const entries = parseChangelog(changelogPath);
  
  		if (!lastVersion) {
@@ -97,7 +97,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  	private getMarkdownThemeWithSettings(): MarkdownTheme {
  		return {
  			...getMarkdownTheme(),
-@@ -3867,11 +3844,6 @@ export class InteractiveMode {
+@@ -3891,11 +3868,6 @@ export class InteractiveMode {
  	showNewVersionNotification(release: LatestPiRelease): void {
  		const action = theme.fg("accent", `${APP_NAME} update`);
  		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
@@ -109,7 +109,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		const note = release.note?.trim();
  
  		this.chatContainer.addChild(new Spacer(1));
-@@ -3888,7 +3860,6 @@ export class InteractiveMode {
+@@ -3912,7 +3884,6 @@ export class InteractiveMode {
  			);
  			this.chatContainer.addChild(new Spacer(1));
  		}
@@ -117,7 +117,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
  		this.ui.requestRender();
  	}
-@@ -5470,6 +5441,11 @@ export class InteractiveMode {
+@@ -5521,6 +5492,11 @@ export class InteractiveMode {
  	}
  
  	private async handleShareCommand(): Promise<void> {
@@ -129,7 +129,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		// Check if gh is available and logged in
  		try {
  			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-@@ -5554,6 +5530,10 @@ export class InteractiveMode {
+@@ -5605,6 +5581,10 @@ export class InteractiveMode {
  
  			// Create the preview URL
  			const previewUrl = getShareViewerUrl(gistId);

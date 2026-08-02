@@ -26,9 +26,9 @@ describe("staged Bangboo package", () => {
       piConfig: { name: "bangboo", configDir: ".bangboo" },
       pi: { extensions: [], skills: [], prompts: [], themes: [] },
       bangboo: {
-        runtimeVersion: "0.80.7",
-        upstreamTag: "v0.80.7",
-        upstreamCommit: "818d67457cdd6b60bce6b121d16b23141c252dd8",
+        runtimeVersion: "0.83.0",
+        upstreamTag: "v0.83.0",
+        upstreamCommit: "845d6ff1f6643aba440341cce877ce1c43ebbc39",
       },
     });
   });

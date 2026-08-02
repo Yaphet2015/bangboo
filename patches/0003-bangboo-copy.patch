@@ -1,25 +1,25 @@
 diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
 --- a/packages/coding-agent/src/cli/args.ts
 +++ b/packages/coding-agent/src/cli/args.ts
-@@ -223,13 +223,13 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+@@ -220,7 +220,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+ 					})
+ 					.join("\n")}\n`
+ 			: "";
 -	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
 +	console.log(`${chalk.bold(APP_NAME)} - AI coding agent with read, bash, edit, write tools
--
-+
+ 
  ${chalk.bold("Usage:")}
    ${APP_NAME} [options] [@files...] [messages...]
--
-+
- ${chalk.bold("Commands:")}
+@@ -229,7 +229,7 @@ ${chalk.bold("Commands:")}
    ${APP_NAME} install <source> [-l]     Install extension source and add to settings
    ${APP_NAME} remove <source> [-l]      Remove extension source from settings
    ${APP_NAME} uninstall <source> [-l]   Alias for remove
--  ${APP_NAME} update [source|self|pi]   Update pi (use --all for pi and extensions)
-+  ${APP_NAME} update [source|self]      Update Bangboo (use --all for Bangboo and extensions)
+-  ${APP_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
++  ${APP_NAME} update [source|self]      Update Bangboo, extensions, or model catalogs
    ${APP_NAME} list                      List installed extensions from settings
    ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config
-@@ -273,7 +273,7 @@ ${chalk.bold("Options:")}
+   ${APP_NAME} auth <command>            Print credentials for external clients
+@@ -274,7 +274,7 @@ ${chalk.bold("Options:")}
    --verbose                      Force verbose startup (overrides quietStartup setting)
    --approve, -a                  Trust project-local files for this run
    --no-approve, -na              Ignore project-local files for this run
@@ -28,7 +28,7 @@ diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/c
    --help, -h                     Show this help
    --version, -v                  Show version number
  
-@@ -373,10 +373,9 @@ ${chalk.bold("Environment Variables:")}
+@@ -383,10 +383,9 @@ ${chalk.bold("Environment Variables:")}
    AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
    ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
    ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
@@ -57,7 +57,7 @@ diff --git a/packages/coding-agent/src/core/project-trust.ts b/packages/coding-a
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
-@@ -833,7 +833,7 @@ export class SessionManager {
+@@ -902,7 +902,7 @@ export class SessionManager {
  			if (this.fileEntries.length === 0) {
  				const explicitPath = this.sessionFile;
  				if (statSync(explicitPath).size > 0) {
@@ -97,28 +97,16 @@ diff --git a/packages/coding-agent/src/core/system-prompt.ts b/packages/coding-a
  - Additional docs: ${docsPath}
  - Examples: ${examplesPath} (extensions, custom tools, SDK)
 -- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
--- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)
+-- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)
 -- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
 -- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
 +- When reading Bangboo docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
-+- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), compatible packages (docs/packages.md)
++- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), compatible packages (docs/packages.md), environment variables (docs/environment-variables.md)
 +- When working on Bangboo topics, read the docs and examples, and follow .md cross-references before implementing
 +- Always read Bangboo .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
  
  	if (appendSection) {
  		prompt += appendSection;
-diff --git a/packages/coding-agent/src/modes/interactive/components/extension-editor.ts b/packages/coding-agent/src/modes/interactive/components/extension-editor.ts
---- a/packages/coding-agent/src/modes/interactive/components/extension-editor.ts
-+++ b/packages/coding-agent/src/modes/interactive/components/extension-editor.ts
-@@ -135,7 +135,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
- 			this.tui.stop();
- 
- 			const [editor, ...editorArgs] = editorCmd.split(" ");
--			process.stdout.write(`Launching external editor: ${editorCmd}\nPi will resume when the editor exits.\n`);
-+			process.stdout.write(`Launching external editor: ${editorCmd}\nBangboo will resume when the editor exits.\n`);
- 
- 			// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
- 			// Node/libuv's console input read active after tui.stop() pauses stdin, racing
 diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 --- a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
@@ -131,10 +119,22 @@ diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-s
  					),
  					1,
  					0,
+diff --git a/packages/coding-agent/src/modes/interactive/external-editor.ts b/packages/coding-agent/src/modes/interactive/external-editor.ts
+--- a/packages/coding-agent/src/modes/interactive/external-editor.ts
++++ b/packages/coding-agent/src/modes/interactive/external-editor.ts
+@@ -16,7 +16,7 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
+ 	try {
+ 		writeFileSync(filePath, options.content, "utf-8");
+ 		const [editor, ...editorArgs] = options.command.split(" ");
+-		process.stdout.write(`Launching external editor: ${options.command}\nPi will resume when the editor exits.\n`);
++		process.stdout.write(`Launching external editor: ${options.command}\nBangboo will resume when the editor exits.\n`);
+ 
+ 		// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
+ 		// Node/libuv's console input read active after the parent pauses stdin, racing
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -786,7 +786,7 @@ export class InteractiveMode {
+@@ -767,7 +767,7 @@ export class InteractiveMode {
  			);
  			const onboarding = theme.fg(
  				"dim",
@@ -143,7 +143,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  			);
  			this.builtInHeader = new ExpandableText(
  				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-@@ -980,7 +980,7 @@ export class InteractiveMode {
+@@ -976,7 +976,7 @@ export class InteractiveMode {
  		}
  
  		if (extendedKeysFormat === "xterm") {
@@ -152,16 +152,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		}
  
  		return undefined;
-@@ -3808,7 +3808,7 @@ export class InteractiveMode {
- 			// Split by space to support editor arguments (e.g., "code --wait")
- 			const [editor, ...editorArgs] = editorCmd.split(" ");
- 
--			process.stdout.write(`Launching external editor: ${editorCmd}\nPi will resume when the editor exits.\n`);
-+			process.stdout.write(`Launching external editor: ${editorCmd}\nBangboo will resume when the editor exits.\n`);
- 
- 			// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
- 			// Node/libuv's console input read active after ui.stop() pauses stdin, racing
-@@ -4414,7 +4414,7 @@ export class InteractiveMode {
+@@ -4416,7 +4416,7 @@ export class InteractiveMode {
  					trustStore.setMany(selection.updates);
  					done();
  					this.showStatus(
@@ -173,26 +164,27 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
-@@ -81,7 +81,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
+@@ -83,7 +83,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
  		case "remove":
  			return `${APP_NAME} remove <source> [-l] [--approve|--no-approve]`;
  		case "update":
--			return `${APP_NAME} update [source|self|pi] [--self|--extensions|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
-+			return `${APP_NAME} update [source|self] [--self|--extensions|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
+-			return `${APP_NAME} update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
++			return `${APP_NAME} update [source|self] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
  		case "list":
  			return `${APP_NAME} list [--approve|--no-approve]`;
  	}
-@@ -149,22 +149,22 @@ Examples:
+@@ -151,24 +151,24 @@ Examples:
  			console.log(`${chalk.bold("Usage:")}
    ${getPackageCommandUsage("update")}
  
--Update pi and installed packages.
-+Update Bangboo and installed packages.
+-Update pi, installed packages, or model catalogs.
++Update Bangboo, installed packages, or model catalogs.
  
  Options:
 -  --self                  Update pi only (default when no target is given)
 +  --self                  Update Bangboo only (default when no target is given)
    --extensions            Update installed packages only
+   --models                Refresh model catalogs only
 -  --all                   Update pi and installed packages
 +  --all                   Update Bangboo and installed packages
    --extension <source>    Update one package only
@@ -206,13 +198,14 @@ diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-
 -  ${APP_NAME} update --all          Update pi and all extensions
 +  ${APP_NAME} update                Update Bangboo only
 +  ${APP_NAME} update --all          Update Bangboo and all extensions
+   ${APP_NAME} update --models       Refresh model catalogs only
    ${APP_NAME} update <source>       Update one package
 -  ${APP_NAME} update pi             Update pi only (self works as alias to pi)
 +  ${APP_NAME} update self           Update Bangboo only
  `);
  			return;
  
-@@ -381,7 +381,7 @@ function printSelfUpdateUnavailable(
+@@ -431,7 +431,7 @@ function printSelfUpdateUnavailable(
  	const entrypoint = process.argv[1];
  	if (entrypoint) {
  		console.error("");

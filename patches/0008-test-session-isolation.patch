@@ -1,6 +1,5 @@
 diff --git a/packages/coding-agent/test/config-dir-test-isolation.test.ts b/packages/coding-agent/test/config-dir-test-isolation.test.ts
 new file mode 100644
-index 00000000..27315bf7
 --- /dev/null
 +++ b/packages/coding-agent/test/config-dir-test-isolation.test.ts
 @@ -0,0 +1,16 @@
@@ -22,7 +21,6 @@ index 00000000..27315bf7
 +});
 diff --git a/packages/coding-agent/test/setup-isolate-config-dir.ts b/packages/coding-agent/test/setup-isolate-config-dir.ts
 new file mode 100644
-index 00000000..0695c7f1
 --- /dev/null
 +++ b/packages/coding-agent/test/setup-isolate-config-dir.ts
 @@ -0,0 +1,13 @@
@@ -40,14 +38,13 @@ index 00000000..0695c7f1
 +	process.env[ENV_AGENT_DIR] = mkdtempSync(join(tmpdir(), "pi-test-config-"));
 +}
 diff --git a/packages/coding-agent/vitest.config.ts b/packages/coding-agent/vitest.config.ts
-index 0582b7df..562567ed 100644
 --- a/packages/coding-agent/vitest.config.ts
 +++ b/packages/coding-agent/vitest.config.ts
-@@ -10,6 +10,7 @@ const tuiSrcIndex = fileURLToPath(new URL("../tui/src/index.ts", import.meta.url
- export default defineConfig({
- 	test: {
- 		globals: true,
-+		setupFiles: ["./test/setup-isolate-config-dir.ts"],
- 		environment: "node",
- 		testTimeout: 30000,
- 		reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
+@@ -6,6 +6,7 @@ export default mergeConfig(
+ 	defineConfig({
+ 		test: {
+ 			globals: true,
++			setupFiles: ["./test/setup-isolate-config-dir.ts"],
+ 			environment: "node",
+ 			testTimeout: 30000,
+ 			// Tests run offline by default; opt in with allowNetwork() from test/test-network-env.ts.
