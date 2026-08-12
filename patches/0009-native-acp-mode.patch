@@ -92,7 +92,7 @@ index 2d76c94a..70d19fe1 100644
  	}
 diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
 new file mode 100644
-index 00000000..af8ea765
+index 00000000..65897d43
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
 @@ -0,0 +1,60 @@
@@ -118,7 +118,7 @@ index 00000000..af8ea765
 +		.onRequest(acp.methods.agent.initialize, () => ({
 +			protocolVersion: acp.PROTOCOL_VERSION,
 +			agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
-+			agentCapabilities: { loadSession: true },
++			agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
 +		}))
 +		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
 +		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
@@ -156,12 +156,104 @@ index 00000000..af8ea765
 +		await connection.closed;
 +	}, options);
 +}
+diff --git a/packages/coding-agent/src/modes/acp/content.ts b/packages/coding-agent/src/modes/acp/content.ts
+new file mode 100644
+index 00000000..79a7253a
+--- /dev/null
++++ b/packages/coding-agent/src/modes/acp/content.ts
+@@ -0,0 +1,21 @@
++import * as acp from "@agentclientprotocol/sdk";
++import type { ImageContent } from "@earendil-works/pi-ai";
++
++export function toBangbooPrompt(
++	prompt: acp.ContentBlock[],
++	imageSupported: boolean,
++): { text: string; images: ImageContent[] } {
++	const text: string[] = [];
++	const images: ImageContent[] = [];
++	for (const block of prompt) {
++		if (block.type === "text") {
++			text.push(block.text);
++		} else if (block.type === "image") {
++			if (!imageSupported) throw acp.RequestError.invalidParams(undefined, "The selected model does not support images");
++			images.push({ type: "image", data: block.data, mimeType: block.mimeType });
++		} else {
++			throw acp.RequestError.invalidParams(undefined, `Unsupported prompt content type: ${block.type}`);
++		}
++	}
++	return { text: text.join("\n\n"), images };
++}
+diff --git a/packages/coding-agent/src/modes/acp/event-mapper.ts b/packages/coding-agent/src/modes/acp/event-mapper.ts
+new file mode 100644
+index 00000000..3f4dbd96
+--- /dev/null
++++ b/packages/coding-agent/src/modes/acp/event-mapper.ts
+@@ -0,0 +1,59 @@
++import type { AgentMessage } from "@earendil-works/pi-agent-core";
++import * as acp from "@agentclientprotocol/sdk";
++import type { AgentSessionEvent } from "../../core/agent-session.ts";
++
++const TOOL_KIND: Record<string, acp.ToolKind> = {
++	read: "read", edit: "edit", write: "edit", grep: "search", find: "search", ls: "search", bash: "execute",
++};
++
++function contentBlocks(content: unknown): acp.ContentBlock[] {
++	if (typeof content === "string") return [{ type: "text", text: content }];
++	if (!Array.isArray(content)) return [];
++	return content.flatMap((block): acp.ContentBlock[] => {
++		if (!block || typeof block !== "object") return [];
++		if ((block as { type?: string }).type === "text") return [{ type: "text", text: String((block as { text?: unknown }).text ?? "") }];
++		if ((block as { type?: string }).type === "image") {
++			const image = block as { data: string; mimeType: string };
++			return [{ type: "image", data: image.data, mimeType: image.mimeType }];
++		}
++		return [];
++	});
++}
++
++function toolContent(result: unknown): acp.ToolCallContent[] | undefined {
++	if (!result || typeof result !== "object") return undefined;
++	const value = result as { content?: unknown; details?: unknown };
++	const content: acp.ToolCallContent[] = contentBlocks(value.content).map((block) => ({ type: "content", content: block }));
++	if (value.details && typeof value.details === "object") {
++		const details = value.details as { patch?: unknown; diff?: unknown; path?: unknown };
++		const patch = typeof details.patch === "string" ? details.patch : typeof details.diff === "string" ? details.diff : undefined;
++		if (patch) content.push({ type: "diff", path: typeof details.path === "string" ? details.path : "/", oldText: "", newText: patch });
++	}
++	return content.length ? content : undefined;
++}
++
++export function mapAgentSessionEvent(event: AgentSessionEvent): acp.SessionUpdate[] {
++	if (event.type === "message_update") {
++		const update = event.assistantMessageEvent;
++		const messageId = `assistant:${event.message.timestamp}`;
++		if (update.type === "text_delta") return [{ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text: update.delta } }];
++		if (update.type === "thinking_delta") return [{ sessionUpdate: "agent_thought_chunk", messageId: `${messageId}:thinking`, content: { type: "text", text: update.delta } }];
++	}
++	if (event.type === "tool_execution_start") return [{ sessionUpdate: "tool_call", toolCallId: event.toolCallId, kind: TOOL_KIND[event.toolName] ?? "other", status: "in_progress", rawInput: event.args, title: event.toolName }];
++	if (event.type === "tool_execution_update") return [{ sessionUpdate: "tool_call_update", toolCallId: event.toolCallId, content: toolContent(event.partialResult), rawOutput: event.partialResult }];
++	if (event.type === "tool_execution_end") return [{ sessionUpdate: "tool_call_update", toolCallId: event.toolCallId, status: event.isError ? "failed" : "completed", content: toolContent(event.result), rawOutput: event.result }];
++	return [];
++}
++
++export async function replaySessionHistory(
++	sessionId: string,
++	messages: AgentMessage[],
++	client: acp.AgentContext,
++): Promise<void> {
++	for (const [index, message] of messages.entries()) {
++		const messageId = `${sessionId}:history:${index}`;
++		if (message.role === "user") await client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "user_message", messageId, content: contentBlocks(message.content) } });
++		else if (message.role === "assistant") await client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "agent_message", messageId, content: contentBlocks(message.content) } });
++		else if (message.role === "toolResult") await client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: message.toolCallId, title: message.toolName, status: message.isError ? "failed" : "completed", content: contentBlocks(message.content).map((content) => ({ type: "content", content })), rawOutput: message } });
++	}
++}
 diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
 new file mode 100644
-index 00000000..b1d81221
+index 00000000..c04c672f
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,287 @@
 +import { isAbsolute, normalize, resolve } from "node:path";
 +import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 +import type { Model } from "@earendil-works/pi-ai";
@@ -177,6 +269,8 @@ index 00000000..b1d81221
 +import { SessionManager } from "../../core/session-manager.ts";
 +import { SettingsManager } from "../../core/settings-manager.ts";
 +import { ProjectTrustStore } from "../../core/trust-manager.ts";
++import { toBangbooPrompt } from "./content.ts";
++import { mapAgentSessionEvent, replaySessionHistory } from "./event-mapper.ts";
 +
 +export interface HostedSession {
 +	session: AgentSession;
@@ -289,6 +383,8 @@ index 00000000..b1d81221
 +	const dependencies = { ...defaultDependencies, ...options.dependencies };
 +	const sessions = new Map<string, HostedSession>();
 +	const reservedSessionIds = new Set<string>();
++	const activePrompts = new Map<string, Promise<acp.PromptResponse>>();
++	const cancelledPrompts = new Set<string>();
 +	let disposed = false;
 +
 +	async function disposeHosted({ session, services }: HostedSession): Promise<void> {
@@ -360,6 +456,7 @@ index 00000000..b1d81221
 +					options.extensionFactories,
 +				);
 +			});
++			await replaySessionHistory(params.sessionId, installed.hosted.session.messages ?? [], options.client);
 +			return { configOptions: installed.configOptions };
 +		},
 +		async setConfigOption(params) {
@@ -383,11 +480,58 @@ index 00000000..b1d81221
 +			}
 +			return { configOptions: await config(hosted) };
 +		},
-+		async prompt() {
-+			throw acp.RequestError.methodNotFound(acp.methods.agent.session.prompt);
++		async prompt(params) {
++			const hosted = getSession(params.sessionId);
++			if (activePrompts.has(params.sessionId)) {
++				throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "A prompt is already running");
++			}
++			const converted = toBangbooPrompt(params.prompt, hosted.session.model?.input.includes("image") === true);
++			const run = (async (): Promise<acp.PromptResponse> => {
++				let delivery = Promise.resolve();
++				const unsubscribe = hosted.session.subscribe((event) => {
++					for (const update of mapAgentSessionEvent(event)) {
++						delivery = delivery.then(() =>
++							options.client.notify(acp.methods.client.session.update, { sessionId: params.sessionId, update }),
++						);
++					}
++					if (event.type === "agent_settled") {
++						const usage = hosted.session.getContextUsage();
++						if (usage?.tokens != null && usage.contextWindow != null) {
++							delivery = delivery.then(() => options.client.notify(acp.methods.client.session.update, {
++								sessionId: params.sessionId,
++								update: { sessionUpdate: "usage_update", used: usage.tokens, size: usage.contextWindow },
++							}));
++						}
++					}
++				});
++				try {
++					await hosted.session.prompt(converted.text, { images: converted.images, source: "rpc" });
++					await delivery;
++					return { stopReason: cancelledPrompts.has(params.sessionId) ? "cancelled" : "end_turn" };
++				} catch (error) {
++					await delivery;
++					const message = error instanceof Error ? error.message : String(error);
++					if (cancelledPrompts.has(params.sessionId) || /abort|cancel/i.test(message)) return { stopReason: "cancelled" };
++					if (/context|token limit|too long/i.test(message)) return { stopReason: "max_tokens" };
++					if (/refus/i.test(message)) return { stopReason: "refusal" };
++					throw error;
++				} finally {
++					unsubscribe();
++				}
++			})();
++			activePrompts.set(params.sessionId, run);
++			try {
++				return await run;
++			} finally {
++				activePrompts.delete(params.sessionId);
++				cancelledPrompts.delete(params.sessionId);
++			}
 +		},
 +		async cancel(params) {
-+			await getSession(params.sessionId).session.abort();
++			const hosted = getSession(params.sessionId);
++			cancelledPrompts.add(params.sessionId);
++			await hosted.session.abort();
++			await activePrompts.get(params.sessionId);
 +		},
 +		async dispose() {
 +			if (disposed) return;
@@ -411,7 +555,7 @@ index 732aee55..c32a5b6b 100644
  export { type ModelInfo, RpcClient, type RpcClientOptions, type RpcEventListener } from "./rpc/rpc-client.ts";
 diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
 new file mode 100644
-index 00000000..f28d3368
+index 00000000..172af7cc
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/acp-mode.test.ts
 @@ -0,0 +1,61 @@
@@ -434,7 +578,7 @@ index 00000000..f28d3368
 +
 +		expect(initialize.protocolVersion).toBe(acp.PROTOCOL_VERSION);
 +		expect(initialize.agentInfo).toMatchObject({ name: "bangboo", version: "0.1.1" });
-+		expect(initialize.agentCapabilities).toEqual({ loadSession: true });
++		expect(initialize.agentCapabilities).toEqual({ loadSession: true, promptCapabilities: { image: true } });
 +	});
 +
 +	it("disposes an injected host exactly once when the connection closes", async () => {
@@ -474,6 +618,68 @@ index 00000000..f28d3368
 +			stderr.mockRestore();
 +			process.exitCode = previousExitCode;
 +		}
++	});
++});
+diff --git a/packages/coding-agent/test/acp/content.test.ts b/packages/coding-agent/test/acp/content.test.ts
+new file mode 100644
+index 00000000..f687982b
+--- /dev/null
++++ b/packages/coding-agent/test/acp/content.test.ts
+@@ -0,0 +1,18 @@
++import { describe, expect, it } from "vitest";
++import { toBangbooPrompt } from "../../src/modes/acp/content.ts";
++
++describe("ACP prompt conversion", () => {
++	it("joins text and converts base64 images", () => {
++		expect(toBangbooPrompt([{ type: "text", text: "one" }, { type: "text", text: "two" }, { type: "image", data: "YWJj", mimeType: "image/png" }], true)).toEqual({
++			text: "one\n\ntwo",
++			images: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
++		});
++	});
++	it("rejects unsupported prompt blocks and images for text-only models", () => {
++		expect(() => toBangbooPrompt([{ type: "audio", data: "YWJj", mimeType: "audio/wav" }], true)).toThrow();
++		expect(() => toBangbooPrompt([{ type: "image", data: "YWJj", mimeType: "image/png" }], false)).toThrow();
++		try { toBangbooPrompt([{ type: "resource_link", name: "x", uri: "file:///x" }], true); } catch (error) {
++			expect(error).toMatchObject({ code: -32602 });
++		}
++	});
++});
+diff --git a/packages/coding-agent/test/acp/event-mapper.test.ts b/packages/coding-agent/test/acp/event-mapper.test.ts
+new file mode 100644
+index 00000000..d8c26778
+--- /dev/null
++++ b/packages/coding-agent/test/acp/event-mapper.test.ts
+@@ -0,0 +1,32 @@
++import * as acp from "@agentclientprotocol/sdk";
++import { describe, expect, it, vi } from "vitest";
++import { mapAgentSessionEvent, replaySessionHistory } from "../../src/modes/acp/event-mapper.ts";
++
++describe("ACP event mapping", () => {
++	it("maps tool lifecycle with stable IDs and exact kinds", () => {
++		expect(mapAgentSessionEvent({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: { command: "pwd" } })).toEqual([
++			{ sessionUpdate: "tool_call", toolCallId: "c1", kind: "execute", status: "in_progress", rawInput: { command: "pwd" }, title: "bash" },
++		]);
++		expect(mapAgentSessionEvent({ type: "tool_execution_end", toolCallId: "c1", toolName: "bash", result: { content: [{ type: "text", text: "bad" }] }, isError: true })).toMatchObject([
++			{ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "failed" },
++		]);
++	});
++	it("maps text and thinking deltas separately", () => {
++		const base = { role: "assistant", content: [], usage: {}, stopReason: "pending", timestamp: 0 } as never;
++		expect(mapAgentSessionEvent({ type: "message_update", message: base, assistantMessageEvent: { type: "text_delta", delta: "a" } as never })[0]).toMatchObject({ sessionUpdate: "agent_message_chunk", content: { text: "a" } });
++		expect(mapAgentSessionEvent({ type: "message_update", message: base, assistantMessageEvent: { type: "thinking_delta", delta: "b" } as never })[0]).toMatchObject({ sessionUpdate: "agent_thought_chunk", content: { text: "b" } });
++	});
++	it("replays stored messages and tool results in order with stable IDs", async () => {
++		const notify = vi.fn(async () => {});
++		await replaySessionHistory("s1", [
++			{ role: "user", content: "hi", timestamp: 1 },
++			{ role: "assistant", content: [{ type: "text", text: "hello" }] },
++			{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "data" }], isError: false },
++		] as never, { notify } as unknown as acp.AgentContext);
++		expect(notify.mock.calls.map((call) => call[1].update)).toMatchObject([
++			{ sessionUpdate: "user_message", messageId: "s1:history:0" },
++			{ sessionUpdate: "agent_message", messageId: "s1:history:1" },
++			{ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed" },
++		]);
 +	});
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
