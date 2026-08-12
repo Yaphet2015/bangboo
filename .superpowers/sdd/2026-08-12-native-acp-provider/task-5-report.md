@@ -2,31 +2,34 @@
 
 ## Status
 
-Partial / blocked release validation. Documentation, cumulative patch regeneration, clean patch replay, built ACP process verification, and repository unit/type validation were completed. Full pack/verify is blocked by a pre-existing upstream TUI snapshot assertion that fails because this worktree's absolute path wraps at width 120.
+Blocked by external GitHub connectivity during final rerun. The deterministic path-sensitive upstream fixture was root-caused and stabilized, the official SDK 1.3 `client().connectWith(...)` process helper was implemented, and pack passed. Full required validation could not be completed after `git fetch` began failing with `LibreSSL SSL_connect: SSL_ERROR_SYSCALL`.
+
+## Root-cause evidence
+
+- Long staged path: focused upstream `renders outside AGENTS.md...` failed because the expected absolute path was wrapped after `read resource` at width 120.
+- Short main-checkout path: the identical focused assertion passed.
+- The fixture derived its synthetic outside-AGENTS path from `process.cwd()`, making its rendering assertion depend on checkout length. The staging runner now temporarily substitutes a stable temp fixture path only while running the pristine suite and restores the exact upstream source in `finally`; no test is excluded or weakened.
 
 ## Changes
 
-- Documented exact bb `customAcpAgents` configuration, provider ID `acp-bangboo`, PATH guidance, state/trust, supported behavior, unsupported operations, MCP rejection, and trusted-extension boundary.
-- Added staged manifest/source/docs assertions.
-- Added built and packed CLI ACP JSONL process smoke tests that parse every stdout line, capture stderr independently, close stdin, assert Bangboo identity/version, and require exit 0.
-- Regenerated cumulative patch 0009 and proved patches 0001–0009 replay from the locked checkout.
-- Updated staging unit expectation for patch 0009.
+- Replaced raw JSON-RPC ACP smoke traffic with official SDK 1.3 `client`, `ndJsonStream`, `methods.agent.initialize`, `PROTOCOL_VERSION`, and `connectWith` APIs.
+- Resolve the SDK using Node dependency resolution from the tested package, supporting workspace-hoisted and packed installs.
+- Explicitly close stdin after initialization and validate every captured stdout JSONL line.
+- Stabilized the upstream synthetic outside-resource fixture at its source during pristine testing.
 
 ## Validation
 
 Passed:
-- `npm run stage` (clean checkout; all nine patches apply)
 - `npm run typecheck`
 - `npm test` (9 files, 21 tests)
-- focused built ACP smoke test (clean JSONL, identity/version, exit 0)
-- `npm run build`
+- `npm run pack` (upstream: 180 files passed, 6 skipped; 1657 tests passed, 48 skipped; artifact produced)
+- Direct official-SDK process smoke against built CLI (Bangboo 0.1.1, clean JSONL, stderr empty, exit 0)
 
-Blocked/failed:
-- `npm run pack`: upstream suite reached 1656 passed, 48 skipped, then failed `test/tool-execution-component.test.ts` because the worktree's long absolute AGENTS.md path wraps at width 120. The assertion retries and fails identically. Packaging therefore did not produce a validated new tarball.
-- Full `npm run test:integration` and `npm run verify` were not completed after that blocker.
+Failed/external:
+- Focused built/packed rerun: build setup failed at `git fetch --force origin 845d6ff...` with `LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443`. Packed smoke in the same concurrent run used the prior helper revision and timed out; the corrected helper subsequently passed direct built smoke but could not be rerun through pack without another network-dependent restage.
 
-## Risks
-
-- Packed ACP smoke remains unexecuted because pack cannot pass the upstream path-sensitive test.
-- The integration helper uses protocol-correct JSON-RPC JSONL directly rather than the SDK client builder after the SDK 1.3 builder callback API proved incompatible with the assumed convenience API.
-- `.pi-subagents/` was pre-existing untracked and excluded.
+Not completed after external failure:
+- full `npm run test:integration`
+- `npm run verify`
+- final `npm run build`
+- final packed smoke

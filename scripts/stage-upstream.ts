@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { access, copyFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveNpmCommand } from "../src/npm-command.js";
@@ -61,6 +62,26 @@ async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   await run("npm", ["run", "build:offline"], aiPackageDir);
   await run("npm", ["run", "build"], join(stageDir, "packages", "agent"));
   runtimeDependenciesBuilt = true;
+}
+
+async function runUpstreamTests(packageDir: string, testArguments: string[]): Promise<void> {
+  const testPath = join(packageDir, "test", "tool-execution-component.test.ts");
+  const original = await readFile(testPath, "utf8");
+  const pathExpression = 'resolve(process.cwd(), "..", "AGENTS.md")';
+  const stablePathExpression = 'resolve(tmpdir(), "pi-tool-execution-component", "AGENTS.md")';
+  const occurrences = original.split(pathExpression).length - 1;
+  if (occurrences !== 2) {
+    throw new Error(`Expected two outside-AGENTS fixture paths, found ${String(occurrences)}`);
+  }
+  const stabilized = original
+    .replace('import { join, resolve } from "node:path";', 'import { tmpdir } from "node:os";\nimport { join, resolve } from "node:path";')
+    .replaceAll(pathExpression, stablePathExpression);
+  await writeFile(testPath, stabilized, "utf8");
+  try {
+    await run("npm", testArguments, packageDir);
+  } finally {
+    await writeFile(testPath, original, "utf8");
+  }
 }
 
 async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstream: boolean): Promise<void> {
@@ -130,7 +151,7 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
       ];
       for (const path of incompatibleWindowsTests) testArguments.push("--exclude", path);
     }
-    await run("npm", testArguments, packageDir);
+    await runUpstreamTests(packageDir, testArguments);
   }
 
   const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
