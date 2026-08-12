@@ -2,7 +2,7 @@
 
 ## Status
 
-Blocked by external GitHub connectivity during final rerun. The deterministic path-sensitive upstream fixture was root-caused and stabilized, the official SDK 1.3 `client().connectWith(...)` process helper was implemented, and pack passed. Full required validation could not be completed after `git fetch` began failing with `LibreSSL SSL_connect: SSL_ERROR_SYSCALL`.
+Complete. A single bounded retry of the required validation sequence passed in full, including the packed official ACP SDK smoke and artifact creation.
 
 ## Root-cause evidence
 
@@ -19,17 +19,14 @@ Blocked by external GitHub connectivity during final rerun. The deterministic pa
 
 ## Validation
 
-Passed:
-- `npm run typecheck`
-- `npm test` (9 files, 21 tests)
-- `npm run pack` (upstream: 180 files passed, 6 skipped; 1657 tests passed, 48 skipped; artifact produced)
-- Direct official-SDK process smoke against built CLI (Bangboo 0.1.1, clean JSONL, stderr empty, exit 0)
+Bounded retry completed in the required sequence on 2026-08-12:
 
-Failed/external:
-- Focused built/packed rerun: build setup failed at `git fetch --force origin 845d6ff...` with `LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443`. Packed smoke in the same concurrent run used the prior helper revision and timed out; the corrected helper subsequently passed direct built smoke but could not be rerun through pack without another network-dependent restage.
+- `npm run test:integration` — passed: 3 files, 22 tests. Both built and packed `serves ACP initialization as clean JSONL and exits when stdin closes` SDK smoke tests passed; the packed smoke completed in 1080 ms.
+- `npm run verify` — passed: TypeScript typecheck, 12 Vitest files / 43 tests, and brand audit across 17 user-facing source files. The packed and built ACP SDK smoke tests also passed in this full run.
+- `npm run build` — passed: fetched locked upstream commit `845d6ff1f6643aba440341cce877ce1c43ebbc39`, staged, installed, and built Bangboo 0.1.1 successfully.
+- `npm run pack` — passed: pristine upstream suite reported 180 files passed / 6 skipped and 1657 tests passed / 48 skipped; package build and `npm pack` succeeded.
+- Artifact confirmed at `artifacts/bangboo-0.1.1.tgz` (4.6 MiB displayed by `ls -lh`; npm reported 4.9 MB package size, 923 files).
 
-Not completed after external failure:
-- full `npm run test:integration`
-- `npm run verify`
-- final `npm run build`
-- final packed smoke
+Concerns:
+- Dependency installation reports one high-severity npm audit finding; this did not fail the required validation.
+- The supplied `context.md` and `plan.md` paths were absent from the worktree during validation; the tracked Task 5 report and explicit validation contract were available.
