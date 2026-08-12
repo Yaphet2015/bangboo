@@ -158,10 +158,10 @@ index 00000000..af8ea765
 +}
 diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
 new file mode 100644
-index 00000000..31f056db
+index 00000000..b1d81221
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,235 @@
 +import { isAbsolute, normalize, resolve } from "node:path";
 +import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 +import type { Model } from "@earendil-works/pi-ai";
@@ -284,10 +284,11 @@ index 00000000..31f056db
 +export function createBangbooSessionHost(options: {
 +	client: acp.AgentContext;
 +	extensionFactories: InlineExtension[];
-+	dependencies?: AcpSessionHostDependencies;
++	dependencies?: Partial<AcpSessionHostDependencies>;
 +}): AcpSessionHost {
-+	const dependencies = options.dependencies ?? defaultDependencies;
++	const dependencies = { ...defaultDependencies, ...options.dependencies };
 +	const sessions = new Map<string, HostedSession>();
++	const reservedSessionIds = new Set<string>();
 +	let disposed = false;
 +
 +	async function disposeHosted({ session, services }: HostedSession): Promise<void> {
@@ -306,39 +307,60 @@ index 00000000..31f056db
 +		return hosted;
 +	}
 +
++	function reserveSessionId(sessionId: string): void {
++		if (sessions.has(sessionId) || reservedSessionIds.has(sessionId)) {
++			throw acp.RequestError.invalidParams({ sessionId }, "Session ID is already hosted");
++		}
++		reservedSessionIds.add(sessionId);
++	}
++
++	async function installSession(
++		sessionId: string,
++		create: () => Promise<HostedSession>,
++	): Promise<{ hosted: HostedSession; configOptions: acp.SessionConfigOption[] }> {
++		let hosted: HostedSession | undefined;
++		try {
++			hosted = await create();
++			sessions.set(sessionId, hosted);
++			return { hosted, configOptions: await config(hosted) };
++		} catch (error) {
++			if (hosted) {
++				sessions.delete(sessionId);
++				await disposeHosted(hosted);
++			}
++			throw error;
++		} finally {
++			reservedSessionIds.delete(sessionId);
++		}
++	}
++
 +	return {
 +		async newSession(params) {
 +			const cwd = validateRequest(params);
-+			const hosted = await dependencies.createRuntime(
-+				cwd,
-+				dependencies.createSessionManager(cwd),
-+				options.extensionFactories,
++			const sessionManager = dependencies.createSessionManager(cwd);
++			const sessionId = sessionManager.getSessionId();
++			reserveSessionId(sessionId);
++			const installed = await installSession(sessionId, () =>
++				dependencies.createRuntime(cwd, sessionManager, options.extensionFactories),
 +			);
-+			const sessionId = hosted.session.sessionManager.getSessionId();
-+			if (sessions.has(sessionId)) {
-+				await disposeHosted(hosted);
-+				throw acp.RequestError.invalidParams({ sessionId }, "Session ID is already hosted");
-+			}
-+			sessions.set(sessionId, hosted);
-+			return { sessionId, configOptions: await config(hosted) };
++			return { sessionId, configOptions: installed.configOptions };
 +		},
 +		async loadSession(params) {
 +			const cwd = validateRequest(params);
-+			if (sessions.has(params.sessionId)) {
-+				throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Session ID is already hosted");
-+			}
-+			const match = (await dependencies.listSessions(cwd)).find((entry) => entry.id === params.sessionId);
-+			if (!match) throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown session ID");
-+			if (normalize(resolve(match.cwd)) !== normalize(cwd)) {
-+				throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session belongs to a different working directory");
-+			}
-+			const hosted = await dependencies.createRuntime(
-+				cwd,
-+				dependencies.openSessionManager(match.path),
-+				options.extensionFactories,
-+			);
-+			sessions.set(params.sessionId, hosted);
-+			return { configOptions: await config(hosted) };
++			reserveSessionId(params.sessionId);
++			const installed = await installSession(params.sessionId, async () => {
++				const match = (await dependencies.listSessions(cwd)).find((entry) => entry.id === params.sessionId);
++				if (!match) throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown session ID");
++				if (normalize(resolve(match.cwd)) !== normalize(cwd)) {
++					throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session belongs to a different working directory");
++				}
++				return dependencies.createRuntime(
++					cwd,
++					dependencies.openSessionManager(match.path),
++					options.extensionFactories,
++				);
++			});
++			return { configOptions: installed.configOptions };
 +		},
 +		async setConfigOption(params) {
 +			const hosted = getSession(params.sessionId);
@@ -456,13 +478,16 @@ index 00000000..f28d3368
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
 new file mode 100644
-index 00000000..af2f2b8e
+index 00000000..0d11beb1
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,371 @@
++import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
 +import * as acp from "@agentclientprotocol/sdk";
 +import type { Model } from "@earendil-works/pi-ai";
-+import { describe, expect, it, vi } from "vitest";
++import { afterEach, describe, expect, it, vi } from "vitest";
 +import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
 +import {
 +	createBangbooSessionHost,
@@ -470,7 +495,8 @@ index 00000000..af2f2b8e
 +	type AcpSessionHostDependencies,
 +	type HostedSession,
 +} from "../../src/modes/acp/session-host.ts";
-+import type { SessionManager } from "../../src/core/session-manager.ts";
++import { getDefaultSessionDir, SessionManager } from "../../src/core/session-manager.ts";
++import { ENV_AGENT_DIR } from "../../src/config.ts";
 +
 +function fakeHost(): AcpSessionHost {
 +	return {
@@ -531,6 +557,7 @@ index 00000000..af2f2b8e
 +function createPolicyHarness(options: { listedCwd?: string; listedId?: string; runtimeIds?: string[] } = {}) {
 +	const hosted: ReturnType<typeof createHostedSession>[] = [];
 +	let runtimeIndex = 0;
++	let managerIndex = 0;
 +	const createRuntime = vi.fn(async () => {
 +		const session = createHostedSession(options.runtimeIds?.[runtimeIndex++] ?? "session-1");
 +		hosted.push(session);
@@ -538,7 +565,12 @@ index 00000000..af2f2b8e
 +	});
 +	const dependencies: AcpSessionHostDependencies = {
 +		createRuntime,
-+		createSessionManager: vi.fn(() => ({}) as SessionManager),
++		createSessionManager: vi.fn(
++			() =>
++				({
++					getSessionId: () => options.runtimeIds?.[managerIndex++] ?? "session-1",
++				}) as SessionManager,
++		),
 +		openSessionManager: vi.fn(() => ({}) as SessionManager),
 +		listSessions: vi.fn(async () =>
 +			options.listedId
@@ -567,6 +599,29 @@ index 00000000..af2f2b8e
 +
 +async function expectInvalid(promise: Promise<unknown>): Promise<void> {
 +	await expect(promise).rejects.toMatchObject({ code: -32602 });
++}
++
++function persistSession(cwd: string, id: string, sessionDir?: string): SessionManager {
++	const manager = SessionManager.create(cwd, sessionDir, { id });
++	manager.appendMessage({ role: "user", content: "persist me", timestamp: Date.now() });
++	manager.appendMessage({
++		role: "assistant",
++		content: [{ type: "text", text: "persisted" }],
++		api: "anthropic-messages",
++		provider: "anthropic",
++		model: "test",
++		usage: {
++			input: 1,
++			output: 1,
++			cacheRead: 0,
++			cacheWrite: 0,
++			totalTokens: 2,
++			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++		},
++		stopReason: "stop",
++		timestamp: Date.now(),
++	});
++	return manager;
 +}
 +
 +describe("ACP session lifecycle routing", () => {
@@ -657,14 +712,80 @@ index 00000000..af2f2b8e
 +		expect(hosted[0].setThinkingLevel).toHaveBeenCalledTimes(1);
 +	});
 +
-+	it("rejects duplicate hosted IDs without replacing or leaking the new runtime", async () => {
-+		const { host, hosted } = createPolicyHarness({ runtimeIds: ["session-1", "session-1"] });
-+		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++	it("atomically rejects concurrent duplicate creation without replacing or leaking a runtime", async () => {
++		const hosted = createHostedSession("session-1");
++		let releaseRuntime!: () => void;
++		const runtimeGate = new Promise<void>((resolve) => {
++			releaseRuntime = resolve;
++		});
++		const createRuntime = vi.fn(async () => {
++			await runtimeGate;
++			return hosted;
++		});
++		const sessionManager = { getSessionId: () => "session-1" } as SessionManager;
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createRuntime,
++				createSessionManager: () => sessionManager,
++			},
++		});
++
++		const first = host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await vi.waitFor(() => expect(createRuntime).toHaveBeenCalledTimes(1));
 +		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
-+		expect(hosted[1].abort).toHaveBeenCalledTimes(1);
-+		expect(hosted[1].flush).toHaveBeenCalledTimes(1);
-+		expect(hosted[1].dispose).toHaveBeenCalledTimes(1);
-+		expect(hosted[0].dispose).not.toHaveBeenCalled();
++		releaseRuntime();
++		await first;
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++		expect(hosted.abort).not.toHaveBeenCalled();
++		expect(hosted.flush).not.toHaveBeenCalled();
++		expect(hosted.dispose).not.toHaveBeenCalled();
++		await host.cancel({ sessionId: "session-1" });
++		expect(hosted.abort).toHaveBeenCalledTimes(1);
++	});
++
++	it("atomically rejects concurrent duplicate loads before opening another runtime", async () => {
++		const hosted = createHostedSession("session-1");
++		let releaseList!: () => void;
++		const listGate = new Promise<void>((resolve) => {
++			releaseList = resolve;
++		});
++		const listSessions = vi.fn(async () => {
++			await listGate;
++			return [
++				{
++					id: "session-1",
++					cwd: "/tmp/project",
++					path: "/sessions/session.jsonl",
++					created: new Date(),
++					modified: new Date(),
++					messageCount: 0,
++					firstMessage: "",
++					allMessagesText: "",
++				},
++			];
++		});
++		const createRuntime = vi.fn(async () => hosted);
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				listSessions,
++				openSessionManager: () => ({}) as SessionManager,
++				createRuntime,
++			},
++		});
++
++		const params = { cwd: "/tmp/project", sessionId: "session-1", mcpServers: [] };
++		const first = host.loadSession(params);
++		await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
++		await expectInvalid(host.loadSession(params));
++		releaseList();
++		await first;
++		expect(listSessions).toHaveBeenCalledTimes(1);
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++		expect(hosted.dispose).not.toHaveBeenCalled();
 +	});
 +
 +	it("rejects loading an already-hosted ID before opening another runtime", async () => {
@@ -686,5 +807,49 @@ index 00000000..af2f2b8e
 +		expect(hosted[0].dispose).toHaveBeenCalledTimes(1);
 +		expect(hosted[0].abort.mock.invocationCallOrder[0]).toBeLessThan(hosted[0].flush.mock.invocationCallOrder[0]);
 +		expect(hosted[0].flush.mock.invocationCallOrder[0]).toBeLessThan(hosted[0].dispose.mock.invocationCallOrder[0]);
++	});
++});
++
++describe("Bangboo ACP persisted session lookup", () => {
++	const originalCwd = process.cwd();
++	const originalAgentDir = process.env[ENV_AGENT_DIR];
++	const tempDirs: string[] = [];
++
++	afterEach(() => {
++		process.chdir(originalCwd);
++		if (originalAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
++		else process.env[ENV_AGENT_DIR] = originalAgentDir;
++		for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
++	});
++
++	it("uses real SessionManager list/open for exact-ID, unknown, and cross-cwd lookup", async () => {
++		const root = mkdtempSync(join(tmpdir(), "bangboo-acp-session-"));
++		tempDirs.push(root);
++		const project = join(root, "project");
++		const otherProject = join(root, "other-project");
++		mkdirSync(project);
++		mkdirSync(otherProject);
++		process.chdir(root);
++		process.env[ENV_AGENT_DIR] = join(root, "agent");
++
++		const exact = persistSession(project, "exact-session");
++		const exactPath = exact.getSessionFile();
++		persistSession(otherProject, "cross-cwd-session", getDefaultSessionDir(project));
++		const openedPaths: (string | undefined)[] = [];
++		const createRuntime = vi.fn(async (_cwd: string, manager: SessionManager) => {
++			openedPaths.push(manager.getSessionFile());
++			return createHostedSession(manager.getSessionId());
++		});
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: { createRuntime },
++		});
++
++		await host.loadSession({ cwd: project, sessionId: "exact-session", mcpServers: [] });
++		expect(openedPaths).toEqual([exactPath]);
++		await expectInvalid(host.loadSession({ cwd: project, sessionId: "missing", mcpServers: [] }));
++		await expectInvalid(host.loadSession({ cwd: project, sessionId: "cross-cwd-session", mcpServers: [] }));
++		expect(createRuntime).toHaveBeenCalledTimes(1);
 +	});
 +});
