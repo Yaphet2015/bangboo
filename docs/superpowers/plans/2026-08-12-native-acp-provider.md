@@ -185,7 +185,7 @@ expect(newSession.configOptions?.find((o) => o.category === "model")?.currentVal
 expect(newSession.configOptions?.find((o) => o.category === "thought_level")?.currentValue).toBe("high");
 ```
 
-Also assert non-empty `mcpServers` fail explicitly, loading an unknown ID fails, loading a session with another cwd fails, and model changes return refreshed config options.
+Also assert non-empty `mcpServers` metadata is accepted but ignored without adding MCP extensions, loading an unknown ID fails, loading a session with another cwd fails, and model changes return refreshed config options.
 
 - [ ] **Step 2: Verify failure**
 
@@ -215,7 +215,7 @@ return { ...created, services, diagnostics: services.diagnostics };
 
 New sessions use `SessionManager.create(cwd)`. Load resolves `SessionManager.list(cwd)` by exact `id`, verifies normalized cwd equality, then opens the exact `path`. Do not scan or read `~/.pi`.
 
-Reject non-absolute cwd and non-empty MCP lists with `acp.RequestError.invalidParams(...)`. Reject runtime diagnostics of type `error` and missing authenticated model with actionable errors.
+Reject non-absolute cwd with `acp.RequestError.invalidParams(...)`. Accept but ignore client MCP metadata for bb compatibility without adding MCP extensions. Reject runtime diagnostics of type `error` and missing authenticated model with actionable errors.
 
 - [ ] **Step 4: Implement standard model and thought config options**
 
@@ -453,7 +453,7 @@ Document this exact bb configuration:
 }
 ```
 
-State that an absolute command path is required when bb's host daemon PATH cannot resolve Bangboo. Document `~/.bangboo/agent`, saved project trust, supported model/thinking/cancel/permission behavior, unsupported fork/rename/archive/auto/RPC UI, non-empty MCP server rejection, and trusted-extension limitation.
+State that an absolute command path is required when bb's host daemon PATH cannot resolve Bangboo. Document `~/.bangboo/agent`, saved project trust, supported model/thinking/cancel/permission behavior, unsupported fork/rename/archive/auto/RPC UI, accepted-but-ignored MCP metadata, and trusted-extension limitation.
 
 - [ ] **Step 4: Regenerate patch and prove clean replay**
 

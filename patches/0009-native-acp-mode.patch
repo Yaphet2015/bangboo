@@ -1531,3 +1531,60 @@ index 00000000..b80279b1
 +		expect(harness.session.abort).not.toHaveBeenCalled();
 +	});
 +});
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -93,9 +93,6 @@
+ 	if (!isAbsolute(params.cwd)) {
+ 		throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session cwd must be an absolute path");
+ 	}
+-	if (params.mcpServers.length > 0) {
+-		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support MCP servers yet");
+-	}
+ 	if ((params.additionalDirectories?.length ?? 0) > 0) {
+ 		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support additional workspace roots yet");
+ 	}
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -169,19 +169,25 @@
+ });
+ 
+ describe("Bangboo ACP session host policy", () => {
+-	it("rejects relative cwd, MCP servers, and additional roots before runtime creation", async () => {
++	it("rejects relative cwd and additional roots before runtime creation", async () => {
+ 		const { host, createRuntime } = createPolicyHarness();
+ 		await expectInvalid(host.newSession({ cwd: "relative", mcpServers: [] }));
+ 		await expectInvalid(
+-			host.newSession({
+-				cwd: "/tmp/project",
+-				mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
+-			}),
+-		);
+-		await expectInvalid(
+ 			host.newSession({ cwd: "/tmp/project", mcpServers: [], additionalDirectories: ["/tmp/other"] }),
+ 		);
+ 		expect(createRuntime).not.toHaveBeenCalled();
++	});
++
++	it("accepts MCP metadata without adding MCP extensions", async () => {
++		const { host, createRuntime, hosted } = createPolicyHarness();
++		await host.newSession({
++			cwd: "/tmp/project",
++			mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
++		});
++
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(1);
++		expect(hosted).toHaveLength(1);
+ 	});
+ 
+ 	it("rejects unknown IDs and sessions belonging to another cwd", async () => {
+--- a/packages/coding-agent/docs/acp.md
++++ b/packages/coding-agent/docs/acp.md
+@@ -19,6 +19,6 @@
+ 
+ Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo.
+ 
+-ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. Requests with non-empty MCP server lists are rejected.
++ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
+ 
+ Extensions are trusted code running with the user's permissions. ACP tool permissions do not sandbox extensions; review installed extensions before starting ACP mode.

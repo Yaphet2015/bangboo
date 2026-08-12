@@ -88,7 +88,7 @@ Capabilities that are not implemented are omitted.
 - a model config option when required by ACP clients;
 - a `thought_level` select option with values supported by the current model.
 
-MCP servers supplied by the client must either be connected according to ACP's required stdio transport semantics or rejected clearly. They must not be accepted and ignored.
+For bb compatibility, MCP server metadata supplied by the client is accepted but ignored. Bangboo must not connect to those servers, inject MCP extensions, or expose their tools.
 
 ### Session Loading
 

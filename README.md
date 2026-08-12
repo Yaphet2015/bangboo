@@ -56,7 +56,7 @@ Bangboo's native ACP provider ID is `acp-bangboo`. Configure bb exactly as follo
 }
 ```
 
-Use an absolute `command` path if bb's host daemon PATH cannot resolve Bangboo. ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking selection, cancellation, and client tool-permission requests are supported. Fork, rename, archive, auto mode, and RPC UI are unsupported, and non-empty MCP server lists are rejected.
+Use an absolute `command` path if bb's host daemon PATH cannot resolve Bangboo. ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking selection, cancellation, and client tool-permission requests are supported. Fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by bb is accepted but ignored; Bangboo does not connect to those servers or expose their tools.
 
 Extensions remain trusted code running with the user's permissions; ACP permissions do not sandbox them. Review installed extensions before starting ACP mode. The packaged CLI includes further details in `docs/acp.md`.
 
