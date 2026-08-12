@@ -185,10 +185,10 @@ index 00000000..79a7253a
 +}
 diff --git a/packages/coding-agent/src/modes/acp/event-mapper.ts b/packages/coding-agent/src/modes/acp/event-mapper.ts
 new file mode 100644
-index 00000000..3f4dbd96
+index 00000000..430811e8
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/event-mapper.ts
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,105 @@
 +import type { AgentMessage } from "@earendil-works/pi-agent-core";
 +import * as acp from "@agentclientprotocol/sdk";
 +import type { AgentSessionEvent } from "../../core/agent-session.ts";
@@ -241,19 +241,65 @@ index 00000000..3f4dbd96
 +	messages: AgentMessage[],
 +	client: acp.AgentContext,
 +): Promise<void> {
++	const replayedToolCalls = new Set<string>();
++	const notify = (update: acp.SessionUpdate): Promise<void> =>
++		client.notify(acp.methods.client.session.update, { sessionId, update });
 +	for (const [index, message] of messages.entries()) {
 +		const messageId = `${sessionId}:history:${index}`;
-+		if (message.role === "user") await client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "user_message", messageId, content: contentBlocks(message.content) } });
-+		else if (message.role === "assistant") await client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "agent_message", messageId, content: contentBlocks(message.content) } });
-+		else if (message.role === "toolResult") await client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: message.toolCallId, title: message.toolName, status: message.isError ? "failed" : "completed", content: contentBlocks(message.content).map((content) => ({ type: "content", content })), rawOutput: message } });
++		if (message.role === "user") {
++			for (const content of contentBlocks(message.content)) {
++				await notify({ sessionUpdate: "user_message_chunk", messageId, content });
++			}
++		} else if (message.role === "assistant") {
++			for (const [blockIndex, block] of message.content.entries()) {
++				if (block.type === "text") {
++					await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text: block.text } });
++				} else if (block.type === "thinking") {
++					await notify({
++						sessionUpdate: "agent_thought_chunk",
++						messageId: `${messageId}:thinking:${blockIndex}`,
++						content: { type: "text", text: block.thinking },
++					});
++				} else if (block.type === "toolCall") {
++					replayedToolCalls.add(block.id);
++					await notify({
++						sessionUpdate: "tool_call",
++						toolCallId: block.id,
++						title: block.name,
++						kind: TOOL_KIND[block.name] ?? "other",
++						status: "in_progress",
++						rawInput: block.arguments,
++					});
++				}
++			}
++		} else if (message.role === "toolResult") {
++			if (!replayedToolCalls.has(message.toolCallId)) {
++				replayedToolCalls.add(message.toolCallId);
++				await notify({
++					sessionUpdate: "tool_call",
++					toolCallId: message.toolCallId,
++					title: message.toolName,
++					kind: TOOL_KIND[message.toolName] ?? "other",
++					status: "in_progress",
++				});
++			}
++			await notify({
++				sessionUpdate: "tool_call_update",
++				toolCallId: message.toolCallId,
++				title: message.toolName,
++				status: message.isError ? "failed" : "completed",
++				content: contentBlocks(message.content).map((content) => ({ type: "content", content })),
++				rawOutput: message,
++			});
++		}
 +	}
 +}
 diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
 new file mode 100644
-index 00000000..c04c672f
+index 00000000..287d1611
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,309 @@
 +import { isAbsolute, normalize, resolve } from "node:path";
 +import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 +import type { Model } from "@earendil-works/pi-ai";
@@ -295,6 +341,22 @@ index 00000000..c04c672f
 +
 +function modelValue(model: Model<any>): string {
 +	return `${model.provider}/${model.id}`;
++}
++
++function settledStopReason(session: AgentSession): acp.StopReason | undefined {
++	let final: (typeof session.messages)[number] | undefined;
++	for (let index = session.messages.length - 1; index >= 0; index--) {
++		if (session.messages[index].role === "assistant") {
++			final = session.messages[index];
++			break;
++		}
++	}
++	if (!final || final.role !== "assistant") return undefined;
++	if (final.stopReason === "length") return "max_tokens";
++	const metadata = `${final.rawStopReason ?? ""}\n${final.errorMessage ?? ""}`;
++	if (/refus|safety|content.?filter/i.test(metadata)) return "refusal";
++	if (/context|token limit|too long/i.test(metadata)) return "max_tokens";
++	return undefined;
 +}
 +
 +export async function buildSessionConfig(
@@ -507,7 +569,11 @@ index 00000000..c04c672f
 +				try {
 +					await hosted.session.prompt(converted.text, { images: converted.images, source: "rpc" });
 +					await delivery;
-+					return { stopReason: cancelledPrompts.has(params.sessionId) ? "cancelled" : "end_turn" };
++					return {
++						stopReason: cancelledPrompts.has(params.sessionId)
++							? "cancelled"
++							: settledStopReason(hosted.session) ?? "end_turn",
++					};
 +				} catch (error) {
 +					await delivery;
 +					const message = error instanceof Error ? error.message : String(error);
@@ -529,9 +595,11 @@ index 00000000..c04c672f
 +		},
 +		async cancel(params) {
 +			const hosted = getSession(params.sessionId);
++			const active = activePrompts.get(params.sessionId);
++			if (!active) return;
 +			cancelledPrompts.add(params.sessionId);
 +			await hosted.session.abort();
-+			await activePrompts.get(params.sessionId);
++			await active;
 +		},
 +		async dispose() {
 +			if (disposed) return;
@@ -622,10 +690,10 @@ index 00000000..172af7cc
 +});
 diff --git a/packages/coding-agent/test/acp/content.test.ts b/packages/coding-agent/test/acp/content.test.ts
 new file mode 100644
-index 00000000..f687982b
+index 00000000..d3db7939
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/content.test.ts
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,27 @@
 +import { describe, expect, it } from "vitest";
 +import { toBangbooPrompt } from "../../src/modes/acp/content.ts";
 +
@@ -636,20 +704,29 @@ index 00000000..f687982b
 +			images: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
 +		});
 +	});
-+	it("rejects unsupported prompt blocks and images for text-only models", () => {
-+		expect(() => toBangbooPrompt([{ type: "audio", data: "YWJj", mimeType: "audio/wav" }], true)).toThrow();
-+		expect(() => toBangbooPrompt([{ type: "image", data: "YWJj", mimeType: "image/png" }], false)).toThrow();
-+		try { toBangbooPrompt([{ type: "resource_link", name: "x", uri: "file:///x" }], true); } catch (error) {
-+			expect(error).toMatchObject({ code: -32602 });
++	it("rejects every unsupported prompt block with invalid params", () => {
++		const unsupported = [
++			[{ type: "audio", data: "YWJj", mimeType: "audio/wav" }],
++			[{ type: "image", data: "YWJj", mimeType: "image/png" }],
++			[{ type: "resource_link", name: "x", uri: "file:///x" }],
++			[{ type: "resource", resource: { uri: "file:///x", text: "x" } }],
++		] as const;
++		for (const [index, prompt] of unsupported.entries()) {
++			try {
++				toBangbooPrompt(prompt as never, index !== 1);
++				expect.fail("expected invalid params");
++			} catch (error) {
++				expect(error).toMatchObject({ code: -32602 });
++			}
 +		}
 +	});
 +});
 diff --git a/packages/coding-agent/test/acp/event-mapper.test.ts b/packages/coding-agent/test/acp/event-mapper.test.ts
 new file mode 100644
-index 00000000..d8c26778
+index 00000000..8a3ab46f
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/event-mapper.test.ts
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,38 @@
 +import * as acp from "@agentclientprotocol/sdk";
 +import { describe, expect, it, vi } from "vitest";
 +import { mapAgentSessionEvent, replaySessionHistory } from "../../src/modes/acp/event-mapper.ts";
@@ -672,22 +749,28 @@ index 00000000..d8c26778
 +		const notify = vi.fn(async () => {});
 +		await replaySessionHistory("s1", [
 +			{ role: "user", content: "hi", timestamp: 1 },
-+			{ role: "assistant", content: [{ type: "text", text: "hello" }] },
++			{ role: "assistant", content: [
++				{ type: "thinking", thinking: "consider" },
++				{ type: "text", text: "hello" },
++				{ type: "toolCall", id: "c1", name: "read", arguments: { path: "/x" } },
++			] },
 +			{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "data" }], isError: false },
 +		] as never, { notify } as unknown as acp.AgentContext);
 +		expect(notify.mock.calls.map((call) => call[1].update)).toMatchObject([
-+			{ sessionUpdate: "user_message", messageId: "s1:history:0" },
-+			{ sessionUpdate: "agent_message", messageId: "s1:history:1" },
++			{ sessionUpdate: "user_message_chunk", messageId: "s1:history:0" },
++			{ sessionUpdate: "agent_thought_chunk", messageId: "s1:history:1:thinking:0", content: { text: "consider" } },
++			{ sessionUpdate: "agent_message_chunk", messageId: "s1:history:1", content: { text: "hello" } },
++			{ sessionUpdate: "tool_call", toolCallId: "c1", rawInput: { path: "/x" } },
 +			{ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed" },
 +		]);
 +	});
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
 new file mode 100644
-index 00000000..0d11beb1
+index 00000000..b80279b1
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,505 @@
 +import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
@@ -948,7 +1031,7 @@ index 00000000..0d11beb1
 +		expect(hosted.flush).not.toHaveBeenCalled();
 +		expect(hosted.dispose).not.toHaveBeenCalled();
 +		await host.cancel({ sessionId: "session-1" });
-+		expect(hosted.abort).toHaveBeenCalledTimes(1);
++		expect(hosted.abort).not.toHaveBeenCalled();
 +	});
 +
 +	it("atomically rejects concurrent duplicate loads before opening another runtime", async () => {
@@ -1057,5 +1140,139 @@ index 00000000..0d11beb1
 +		await expectInvalid(host.loadSession({ cwd: project, sessionId: "missing", mcpServers: [] }));
 +		await expectInvalid(host.loadSession({ cwd: project, sessionId: "cross-cwd-session", mcpServers: [] }));
 +		expect(createRuntime).toHaveBeenCalledTimes(1);
++	});
++});
++
++describe("Bangboo ACP prompt streaming", () => {
++	it("completes every history notification before load returns", async () => {
++		let releaseNotify!: () => void;
++		const notifyGate = new Promise<void>((resolve) => { releaseNotify = resolve; });
++		const notify = vi.fn(async () => notifyGate);
++		const hosted = createHostedSession("session-1");
++		(hosted.session as unknown as { messages: unknown[] }).messages = [{ role: "user", content: "persisted", timestamp: 1 }];
++		const host = createBangbooSessionHost({
++			client: { notify } as unknown as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				listSessions: async () => [{ id: "session-1", cwd: "/tmp/project", path: "/session", created: new Date(), modified: new Date(), messageCount: 1, firstMessage: "persisted", allMessagesText: "persisted" }],
++				openSessionManager: () => ({}) as SessionManager,
++				createRuntime: async () => hosted,
++			},
++		});
++		let loaded = false;
++		const load = host.loadSession({ cwd: "/tmp/project", sessionId: "session-1", mcpServers: [] }).then(() => { loaded = true; });
++		await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
++		expect(loaded).toBe(false);
++		releaseNotify();
++		await load;
++		expect(loaded).toBe(true);
++	});
++
++	function createPromptHarness(options: {
++		usage?: { tokens: number | null; contextWindow: number | null };
++		messages?: unknown[];
++		prompt?: (emit: (event: unknown) => void) => Promise<void>;
++	} = {}) {
++		let listener: ((event: unknown) => void) | undefined;
++		const session = {
++			model: { ...models[0], input: ["text"] },
++			thinkingLevel: "high",
++			messages: options.messages ?? [],
++			getAvailableThinkingLevels: vi.fn(() => ["off", "high"]),
++			getContextUsage: vi.fn(() => options.usage),
++			subscribe: vi.fn((next: (event: unknown) => void) => {
++				listener = next;
++				return vi.fn(() => { listener = undefined; });
++			}),
++			prompt: vi.fn(async () => options.prompt?.((event) => listener?.(event))),
++			abort: vi.fn(async () => {}),
++			dispose: vi.fn(),
++		};
++		const notify = vi.fn(async () => {});
++		const hosted = {
++			session: session as never,
++			services: {
++				modelRuntime: { getAvailable: vi.fn(async () => models) },
++				settingsManager: { flush: vi.fn(async () => {}) },
++			} as never,
++		};
++		const host = createBangbooSessionHost({
++			client: { notify } as unknown as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createSessionManager: () => ({ getSessionId: () => "session-1" }) as SessionManager,
++				createRuntime: async () => hosted,
++			},
++		});
++		return { host, session, notify };
++	}
++
++	it("serializes notifications and sends known usage before resolving", async () => {
++		let concurrent = 0;
++		let maximum = 0;
++		const order: string[] = [];
++		const harness = createPromptHarness({
++			usage: { tokens: 12, contextWindow: 100 },
++			prompt: async (emit) => {
++				emit({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} });
++				emit({ type: "tool_execution_end", toolCallId: "c1", toolName: "bash", result: {}, isError: false });
++				emit({ type: "agent_settled" });
++			},
++		});
++		harness.notify.mockImplementation(async (_method, params) => {
++			concurrent++;
++			maximum = Math.max(maximum, concurrent);
++			order.push(params.update.sessionUpdate);
++			await new Promise((resolve) => setTimeout(resolve, 1));
++			concurrent--;
++		});
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expect(harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] })).resolves.toEqual({ stopReason: "end_turn" });
++		expect(maximum).toBe(1);
++		expect(order).toEqual(["tool_call", "tool_call_update", "usage_update"]);
++		expect(harness.notify.mock.calls.at(-1)?.[1].update).toMatchObject({ used: 12, size: 100 });
++	});
++
++	it("omits usage when either value is unknown", async () => {
++		const harness = createPromptHarness({ usage: { tokens: null, contextWindow: 100 }, prompt: async (emit) => emit({ type: "agent_settled" }) });
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] });
++		expect(harness.notify).not.toHaveBeenCalled();
++	});
++
++	it("uses typed final assistant stop metadata", async () => {
++		const harness = createPromptHarness({ messages: [{ role: "assistant", content: [], stopReason: "length", timestamp: 1 }] });
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expect(harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] })).resolves.toEqual({ stopReason: "max_tokens" });
++		harness.session.messages = [{ role: "assistant", content: [], stopReason: "error", rawStopReason: "content_filter", timestamp: 2 }];
++		await expect(harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] })).resolves.toEqual({ stopReason: "refusal" });
++	});
++
++	it("delivers the final failed tool update before cancelled response and none afterward", async () => {
++		let emit!: (event: unknown) => void;
++		let settle!: () => void;
++		const promptGate = new Promise<void>((resolve) => { settle = resolve; });
++		const harness = createPromptHarness({ prompt: async (next) => { emit = next; await promptGate; } });
++		harness.session.abort.mockImplementation(async () => {
++			emit({ type: "tool_execution_end", toolCallId: "c1", toolName: "bash", result: {}, isError: true });
++			settle();
++		});
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		const prompt = harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] });
++		await vi.waitFor(() => expect(harness.session.prompt).toHaveBeenCalled());
++		await harness.host.cancel({ sessionId: "session-1" });
++		await expect(prompt).resolves.toEqual({ stopReason: "cancelled" });
++		expect(harness.notify).toHaveBeenCalledTimes(1);
++		expect(harness.notify.mock.calls[0][1].update).toMatchObject({ toolCallId: "c1", status: "failed" });
++		emit({ type: "tool_execution_start", toolCallId: "late", toolName: "bash", args: {} });
++		await Promise.resolve();
++		expect(harness.notify).toHaveBeenCalledTimes(1);
++	});
++
++	it("ignores cancellation without an active prompt", async () => {
++		const harness = createPromptHarness();
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await harness.host.cancel({ sessionId: "session-1" });
++		expect(harness.session.abort).not.toHaveBeenCalled();
 +	});
 +});
