@@ -30,7 +30,16 @@ describe("staged Bangboo package", () => {
         upstreamTag: "v0.83.0",
         upstreamCommit: "845d6ff1f6643aba440341cce877ce1c43ebbc39",
       },
+      dependencies: { "@agentclientprotocol/sdk": "1.3.0" },
     });
+  });
+
+  test("ships native ACP mode and its distribution documentation", async () => {
+    await expect(readFile(new URL("src/modes/acp/acp-mode.ts", packageRoot), "utf8")).resolves.toContain(
+      "session/set_config_option",
+    );
+    await expect(readFile(new URL("docs/acp.md", packageRoot), "utf8")).resolves.toContain('"customAcpAgents"');
+    await expect(readFile(new URL("README.md", packageRoot), "utf8")).resolves.toContain("docs/acp.md");
   });
 
   test("boots through the Bangboo environment shim", async () => {

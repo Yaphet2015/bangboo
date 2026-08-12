@@ -28,6 +28,36 @@ index 197776a2..a945b91d 100644
  		}
  	}
  }
+diff --git a/packages/coding-agent/docs/acp.md b/packages/coding-agent/docs/acp.md
+new file mode 100644
+index 00000000..c18e53f9
+--- /dev/null
++++ b/packages/coding-agent/docs/acp.md
+@@ -0,0 +1,24 @@
++# Native ACP mode
++
++Run `bangboo acp` to expose Bangboo over ACP JSONL on stdin/stdout.
++
++For bb, use provider ID `acp-bangboo` and this exact configuration:
++
++```json
++{
++  "customAcpAgents": [
++    {
++      "id": "bangboo",
++      "displayName": "Bangboo",
++      "command": "bangboo",
++      "args": ["acp"]
++    }
++  ]
++}
++```
++
++Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo.
++
++ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. Requests with non-empty MCP server lists are rejected.
++
++Extensions are trusted code running with the user's permissions. ACP tool permissions do not sandbox extensions; review installed extensions before starting ACP mode.
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
 index 74c9b7b8..ffce423e 100644
 --- a/packages/coding-agent/package.json
@@ -92,10 +122,10 @@ index 2d76c94a..70d19fe1 100644
  	}
 diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
 new file mode 100644
-index 00000000..65897d43
+index 00000000..53c8f226
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,61 @@
 +import { Readable, Writable } from "node:stream";
 +import * as acp from "@agentclientprotocol/sdk";
 +import { builtInExtensions } from "../../extensions/index.ts";
@@ -122,6 +152,7 @@ index 00000000..65897d43
 +		}))
 +		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
 +		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
++		// ACP method: session/set_config_option
 +		.onRequest(acp.methods.agent.session.setConfigOption, ({ params, client }) =>
 +			getHost(client).setConfigOption(params),
 +		)

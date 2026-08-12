@@ -35,8 +35,30 @@ bangboo                         # interactive mode
 bangboo -p "Review this code"   # print mode
 bangboo --mode json            # JSON event stream
 bangboo --mode rpc             # RPC over stdin/stdout
+bangboo acp                    # native ACP over stdin/stdout
 bangboo --help
 ```
+
+### bb / ACP integration
+
+Bangboo's native ACP provider ID is `acp-bangboo`. Configure bb exactly as follows:
+
+```json
+{
+  "customAcpAgents": [
+    {
+      "id": "bangboo",
+      "displayName": "Bangboo",
+      "command": "bangboo",
+      "args": ["acp"]
+    }
+  ]
+}
+```
+
+Use an absolute `command` path if bb's host daemon PATH cannot resolve Bangboo. ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking selection, cancellation, and client tool-permission requests are supported. Fork, rename, archive, auto mode, and RPC UI are unsupported, and non-empty MCP server lists are rejected.
+
+Extensions remain trusted code running with the user's permissions; ACP permissions do not sandbox them. Review installed extensions before starting ACP mode. The packaged CLI includes further details in `docs/acp.md`.
 
 Package management uses Bangboo's isolated directories:
 

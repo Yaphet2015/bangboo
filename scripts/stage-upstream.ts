@@ -148,6 +148,10 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
     copyOwnedFile("CHANGELOG.md"),
   ]);
 
+  if (installDependencies) {
+    await run("npm", ["install", "--ignore-scripts", "--no-package-lock", "@agentclientprotocol/sdk@1.3.0"], packageDir);
+  }
+
   const bangbooManifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8")) as {
     name?: string;
     version?: string;

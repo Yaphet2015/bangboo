@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, test } from "vitest";
 import { resolveNpmCommand } from "../../src/npm-command.js";
+import { initializeAcpProcess } from "./acp-process.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -37,6 +38,17 @@ describe("built Bangboo CLI", () => {
     const npm = resolveNpmCommand(["run", "build"]);
     await execFileAsync(npm.command, npm.args, { cwd: repositoryRoot, timeout: 300_000 });
   }, 300_000);
+
+  test("serves ACP initialization as clean JSONL and exits when stdin closes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "bangboo-acp-home-"));
+    const project = await mkdtemp(join(tmpdir(), "bangboo-acp-project-"));
+    const result = await initializeAcpProcess(cli, stagedPackage, project, home);
+
+    expect(result.response.agentInfo).toEqual({ name: "bangboo", version: "0.1.1" });
+    expect(result.response.protocolVersion).toBeTypeOf("number");
+    expect(result.stdout.trim()).not.toBe("");
+    expect(result.exitCode).toBe(0);
+  }, 30_000);
 
   test("reports independent and runtime versions", async () => {
     const home = await mkdtemp(join(tmpdir(), "bangboo-home-"));
