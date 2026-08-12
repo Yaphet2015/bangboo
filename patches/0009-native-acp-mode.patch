@@ -1588,3 +1588,25 @@ index 00000000..b80279b1
 +ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
  
  Extensions are trusted code running with the user's permissions. ACP tool permissions do not sandbox extensions; review installed extensions before starting ACP mode.
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -440,6 +440,19 @@
+ 		return { host, session, notify };
+ 	}
+ 
++	it("prompts normally when MCP metadata is ignored", async () => {
++		const harness = createPromptHarness();
++		await harness.host.newSession({
++			cwd: "/tmp/project",
++			mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
++		});
++
++		await expect(
++			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] }),
++		).resolves.toEqual({ stopReason: "end_turn" });
++		expect(harness.session.prompt).toHaveBeenCalledWith("go", { images: [], source: "rpc" });
++	});
++
+ 	it("serializes notifications and sends known usage before resolving", async () => {
+ 		let concurrent = 0;
+ 		let maximum = 0;
