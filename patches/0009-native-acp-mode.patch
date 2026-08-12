@@ -92,10 +92,10 @@ index 2d76c94a..70d19fe1 100644
  	}
 diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
 new file mode 100644
-index 00000000..8d8ac89a
+index 00000000..af8ea765
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,60 @@
 +import { Readable, Writable } from "node:stream";
 +import * as acp from "@agentclientprotocol/sdk";
 +import { builtInExtensions } from "../../extensions/index.ts";
@@ -129,31 +129,39 @@ index 00000000..8d8ac89a
 +		.onNotification(acp.methods.agent.session.cancel, ({ params, client }) => getHost(client).cancel(params));
 +}
 +
++export async function runAcpAgentApp(
++	connect: (app: acp.AgentApp) => Promise<void>,
++	options: AcpModeOptions = {},
++): Promise<void> {
++	let host: AcpSessionHost | undefined;
++	const createHost = options.hostFactory;
++	const hostFactory = (client: acp.AgentContext): AcpSessionHost => {
++		host ??= createHost?.(client) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
++		return host;
++	};
++	try {
++		await connect(createAcpAgentApp({ ...options, hostFactory }));
++	} finally {
++		await host?.dispose();
++	}
++}
++
 +export async function runAcpMode(options: AcpModeOptions = {}): Promise<void> {
 +	const stream = acp.ndJsonStream(
 +		Writable.toWeb(process.stdout),
 +		Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
 +	);
-+	let host: AcpSessionHost | undefined;
-+	const hostFactory =
-+		options.hostFactory ??
-+		((client: acp.AgentContext) => {
-+			host ??= createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
-+			return host;
-+		});
-+	const connection = createAcpAgentApp({ ...options, hostFactory }).connect(stream);
-+	try {
++	await runAcpAgentApp(async (app) => {
++		const connection = app.connect(stream);
 +		await connection.closed;
-+	} finally {
-+		await host?.dispose();
-+	}
++	}, options);
 +}
 diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
 new file mode 100644
-index 00000000..ac34099d
+index 00000000..31f056db
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,213 @@
 +import { isAbsolute, normalize, resolve } from "node:path";
 +import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 +import type { Model } from "@earendil-works/pi-ai";
@@ -170,9 +178,16 @@ index 00000000..ac34099d
 +import { SettingsManager } from "../../core/settings-manager.ts";
 +import { ProjectTrustStore } from "../../core/trust-manager.ts";
 +
-+interface HostedSession {
++export interface HostedSession {
 +	session: AgentSession;
 +	services: AgentSessionServices;
++}
++
++export interface AcpSessionHostDependencies {
++	createRuntime(cwd: string, sessionManager: SessionManager, extensionFactories: InlineExtension[]): Promise<HostedSession>;
++	createSessionManager(cwd: string): SessionManager;
++	openSessionManager(path: string): SessionManager;
++	listSessions(cwd: string): ReturnType<typeof SessionManager.list>;
 +}
 +
 +export interface AcpSessionHost {
@@ -228,38 +243,57 @@ index 00000000..ac34099d
 +	return resolve(params.cwd);
 +}
 +
++async function createRuntime(
++	cwd: string,
++	sessionManager: SessionManager,
++	extensionFactories: InlineExtension[],
++): Promise<HostedSession> {
++	const agentDir = getAgentDir();
++	const trustStore = new ProjectTrustStore(agentDir);
++	const settingsManager = SettingsManager.create(cwd, agentDir, {
++		projectTrusted: trustStore.get(cwd) === true,
++	});
++	const services = await createAgentSessionServices({
++		cwd,
++		agentDir,
++		settingsManager,
++		resourceLoaderOptions: { extensionFactories },
++	});
++	const errors = services.diagnostics.filter((diagnostic) => diagnostic.type === "error");
++	if (errors.length > 0) {
++		await settingsManager.flush();
++		throw new Error(errors.map((diagnostic) => diagnostic.message).join("\n"));
++	}
++	const created = await createAgentSessionFromServices({ services, sessionManager });
++	const available = await services.modelRuntime.getAvailable();
++	if (!created.session.model || !available.some((model) => modelValue(model) === modelValue(created.session.model!))) {
++		created.session.dispose();
++		await settingsManager.flush();
++		throw acp.RequestError.authRequired(undefined, "No authenticated model is available. Configure a provider API key first.");
++	}
++	return { ...created, services };
++}
++
++const defaultDependencies: AcpSessionHostDependencies = {
++	createRuntime,
++	createSessionManager: (cwd) => SessionManager.create(cwd),
++	openSessionManager: (path) => SessionManager.open(path),
++	listSessions: (cwd) => SessionManager.list(cwd),
++};
++
 +export function createBangbooSessionHost(options: {
 +	client: acp.AgentContext;
 +	extensionFactories: InlineExtension[];
++	dependencies?: AcpSessionHostDependencies;
 +}): AcpSessionHost {
++	const dependencies = options.dependencies ?? defaultDependencies;
 +	const sessions = new Map<string, HostedSession>();
 +	let disposed = false;
 +
-+	async function createRuntime(cwd: string, sessionManager: SessionManager): Promise<HostedSession> {
-+		const agentDir = getAgentDir();
-+		const trustStore = new ProjectTrustStore(agentDir);
-+		const settingsManager = SettingsManager.create(cwd, agentDir, {
-+			projectTrusted: trustStore.get(cwd) === true,
-+		});
-+		const services = await createAgentSessionServices({
-+			cwd,
-+			agentDir,
-+			settingsManager,
-+			resourceLoaderOptions: { extensionFactories: options.extensionFactories },
-+		});
-+		const errors = services.diagnostics.filter((diagnostic) => diagnostic.type === "error");
-+		if (errors.length > 0) {
-+			await settingsManager.flush();
-+			throw new Error(errors.map((diagnostic) => diagnostic.message).join("\n"));
-+		}
-+		const created = await createAgentSessionFromServices({ services, sessionManager });
-+		const available = await services.modelRuntime.getAvailable();
-+		if (!created.session.model || !available.some((model) => modelValue(model) === modelValue(created.session.model!))) {
-+			created.session.dispose();
-+			await settingsManager.flush();
-+			throw acp.RequestError.authRequired(undefined, "No authenticated model is available. Configure a provider API key first.");
-+		}
-+		return { ...created, services };
++	async function disposeHosted({ session, services }: HostedSession): Promise<void> {
++		await session.abort();
++		await services.settingsManager.flush();
++		session.dispose();
 +	}
 +
 +	async function config(hosted: HostedSession): Promise<acp.SessionConfigOption[]> {
@@ -275,19 +309,34 @@ index 00000000..ac34099d
 +	return {
 +		async newSession(params) {
 +			const cwd = validateRequest(params);
-+			const hosted = await createRuntime(cwd, SessionManager.create(cwd));
++			const hosted = await dependencies.createRuntime(
++				cwd,
++				dependencies.createSessionManager(cwd),
++				options.extensionFactories,
++			);
 +			const sessionId = hosted.session.sessionManager.getSessionId();
++			if (sessions.has(sessionId)) {
++				await disposeHosted(hosted);
++				throw acp.RequestError.invalidParams({ sessionId }, "Session ID is already hosted");
++			}
 +			sessions.set(sessionId, hosted);
 +			return { sessionId, configOptions: await config(hosted) };
 +		},
 +		async loadSession(params) {
 +			const cwd = validateRequest(params);
-+			const match = (await SessionManager.list(cwd)).find((entry) => entry.id === params.sessionId);
++			if (sessions.has(params.sessionId)) {
++				throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Session ID is already hosted");
++			}
++			const match = (await dependencies.listSessions(cwd)).find((entry) => entry.id === params.sessionId);
 +			if (!match) throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown session ID");
 +			if (normalize(resolve(match.cwd)) !== normalize(cwd)) {
 +				throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session belongs to a different working directory");
 +			}
-+			const hosted = await createRuntime(cwd, SessionManager.open(match.path));
++			const hosted = await dependencies.createRuntime(
++				cwd,
++				dependencies.openSessionManager(match.path),
++				options.extensionFactories,
++			);
 +			sessions.set(params.sessionId, hosted);
 +			return { configOptions: await config(hosted) };
 +		},
@@ -321,13 +370,7 @@ index 00000000..ac34099d
 +		async dispose() {
 +			if (disposed) return;
 +			disposed = true;
-+			await Promise.all(
-+				[...sessions.values()].map(async ({ session, services }) => {
-+					await session.abort();
-+					await services.settingsManager.flush();
-+					session.dispose();
-+				}),
-+			);
++			await Promise.all([...sessions.values()].map(disposeHosted));
 +			sessions.clear();
 +		},
 +	};
@@ -346,14 +389,15 @@ index 732aee55..c32a5b6b 100644
  export { type ModelInfo, RpcClient, type RpcClientOptions, type RpcEventListener } from "./rpc/rpc-client.ts";
 diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
 new file mode 100644
-index 00000000..66bda92b
+index 00000000..f28d3368
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/acp-mode.test.ts
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,61 @@
 +import * as acp from "@agentclientprotocol/sdk";
 +import { describe, expect, it, vi } from "vitest";
 +import { main } from "../../src/main.ts";
-+import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
++import { createAcpAgentApp, runAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
++import type { AcpSessionHost } from "../../src/modes/acp/session-host.ts";
 +
 +describe("ACP mode", () => {
 +	it("advertises session loading after lifecycle handlers are registered", async () => {
@@ -369,6 +413,28 @@ index 00000000..66bda92b
 +		expect(initialize.protocolVersion).toBe(acp.PROTOCOL_VERSION);
 +		expect(initialize.agentInfo).toMatchObject({ name: "bangboo", version: "0.1.1" });
 +		expect(initialize.agentCapabilities).toEqual({ loadSession: true });
++	});
++
++	it("disposes an injected host exactly once when the connection closes", async () => {
++		const dispose = vi.fn(async () => {});
++		const host = {
++			newSession: vi.fn(async () => ({ sessionId: "session-1", configOptions: [] })),
++			loadSession: vi.fn(async () => ({ configOptions: [] })),
++			setConfigOption: vi.fn(async () => ({ configOptions: [] })),
++			prompt: vi.fn(async () => ({ stopReason: "end_turn" as const })),
++			cancel: vi.fn(async () => {}),
++			dispose,
++		} satisfies AcpSessionHost;
++
++		await runAcpAgentApp(
++			(app) =>
++				acp.client({ name: "test-client" }).connectWith(app, (agent) =>
++					agent.request(acp.methods.agent.session.new, { cwd: "/tmp/project", mcpServers: [] }),
++				),
++			{ hostFactory: () => host },
++		);
++
++		expect(dispose).toHaveBeenCalledTimes(1);
 +	});
 +
 +	it("prints ACP help before normal interactive startup", async () => {
@@ -390,14 +456,21 @@ index 00000000..66bda92b
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
 new file mode 100644
-index 00000000..077c9707
+index 00000000..af2f2b8e
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,228 @@
 +import * as acp from "@agentclientprotocol/sdk";
++import type { Model } from "@earendil-works/pi-ai";
 +import { describe, expect, it, vi } from "vitest";
 +import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
-+import type { AcpSessionHost } from "../../src/modes/acp/session-host.ts";
++import {
++	createBangbooSessionHost,
++	type AcpSessionHost,
++	type AcpSessionHostDependencies,
++	type HostedSession,
++} from "../../src/modes/acp/session-host.ts";
++import type { SessionManager } from "../../src/core/session-manager.ts";
 +
 +function fakeHost(): AcpSessionHost {
 +	return {
@@ -408,6 +481,92 @@ index 00000000..077c9707
 +		cancel: vi.fn(async () => {}),
 +		dispose: vi.fn(async () => {}),
 +	};
++}
++
++const models = [
++	{ provider: "zai-coding-cn", id: "glm-5", name: "GLM-5", reasoning: true },
++	{ provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet", reasoning: true },
++] as Model<any>[];
++
++function createHostedSession(id = "session-1"): HostedSession & {
++	abort: ReturnType<typeof vi.fn>;
++	flush: ReturnType<typeof vi.fn>;
++	dispose: ReturnType<typeof vi.fn>;
++	setModel: ReturnType<typeof vi.fn>;
++	setThinkingLevel: ReturnType<typeof vi.fn>;
++} {
++	const abort = vi.fn(async () => {});
++	const flush = vi.fn(async () => {});
++	const dispose = vi.fn();
++	const setModel = vi.fn(async (model: Model<any>) => {
++		session.model = model;
++	});
++	const setThinkingLevel = vi.fn((level: string) => {
++		session.thinkingLevel = level;
++	});
++	const session = {
++		model: models[0],
++		thinkingLevel: "high",
++		getAvailableThinkingLevels: vi.fn(() => ["off", "low", "high"]),
++		setModel,
++		setThinkingLevel,
++		abort,
++		dispose,
++		sessionManager: { getSessionId: () => id },
++	};
++	return {
++		session: session as never,
++		services: {
++			modelRuntime: { getAvailable: vi.fn(async () => models) },
++			settingsManager: { flush },
++		} as never,
++		abort,
++		flush,
++		dispose,
++		setModel,
++		setThinkingLevel,
++	};
++}
++
++function createPolicyHarness(options: { listedCwd?: string; listedId?: string; runtimeIds?: string[] } = {}) {
++	const hosted: ReturnType<typeof createHostedSession>[] = [];
++	let runtimeIndex = 0;
++	const createRuntime = vi.fn(async () => {
++		const session = createHostedSession(options.runtimeIds?.[runtimeIndex++] ?? "session-1");
++		hosted.push(session);
++		return session;
++	});
++	const dependencies: AcpSessionHostDependencies = {
++		createRuntime,
++		createSessionManager: vi.fn(() => ({}) as SessionManager),
++		openSessionManager: vi.fn(() => ({}) as SessionManager),
++		listSessions: vi.fn(async () =>
++			options.listedId
++				? [
++						{
++							id: options.listedId,
++							cwd: options.listedCwd ?? "/tmp/project",
++							path: "/sessions/session.jsonl",
++							created: new Date(),
++							modified: new Date(),
++							messageCount: 0,
++							firstMessage: "",
++							allMessagesText: "",
++						},
++					]
++				: [],
++		),
++	};
++	const host = createBangbooSessionHost({
++		client: {} as acp.AgentContext,
++		extensionFactories: [],
++		dependencies,
++	});
++	return { host, dependencies, createRuntime, hosted };
++}
++
++async function expectInvalid(promise: Promise<unknown>): Promise<void> {
++	await expect(promise).rejects.toMatchObject({ code: -32602 });
 +}
 +
 +describe("ACP session lifecycle routing", () => {
@@ -435,5 +594,97 @@ index 00000000..077c9707
 +			configId: "model",
 +			value: "provider/model",
 +		});
++	});
++});
++
++describe("Bangboo ACP session host policy", () => {
++	it("rejects relative cwd, MCP servers, and additional roots before runtime creation", async () => {
++		const { host, createRuntime } = createPolicyHarness();
++		await expectInvalid(host.newSession({ cwd: "relative", mcpServers: [] }));
++		await expectInvalid(
++			host.newSession({
++				cwd: "/tmp/project",
++				mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
++			}),
++		);
++		await expectInvalid(
++			host.newSession({ cwd: "/tmp/project", mcpServers: [], additionalDirectories: ["/tmp/other"] }),
++		);
++		expect(createRuntime).not.toHaveBeenCalled();
++	});
++
++	it("rejects unknown IDs and sessions belonging to another cwd", async () => {
++		const unknown = createPolicyHarness();
++		await expectInvalid(
++			unknown.host.loadSession({ cwd: "/tmp/project", sessionId: "missing", mcpServers: [] }),
++		);
++		const crossCwd = createPolicyHarness({ listedId: "session-1", listedCwd: "/tmp/other" });
++		await expectInvalid(
++			crossCwd.host.loadSession({ cwd: "/tmp/project", sessionId: "session-1", mcpServers: [] }),
++		);
++		expect(crossCwd.createRuntime).not.toHaveBeenCalled();
++	});
++
++	it("returns and refreshes standard model and thinking configuration", async () => {
++		const { host, hosted } = createPolicyHarness();
++		const created = await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		expect(created.configOptions?.find((option) => option.category === "model")?.currentValue).toBe(
++			"zai-coding-cn/glm-5",
++		);
++		expect(created.configOptions?.find((option) => option.category === "thought_level")?.currentValue).toBe("high");
++
++		const changedModel = await host.setConfigOption({
++			sessionId: "session-1",
++			configId: "model",
++			value: "anthropic/claude-sonnet",
++		});
++		expect(hosted[0].setModel).toHaveBeenCalledWith(models[1]);
++		expect(changedModel.configOptions.find((option) => option.category === "model")?.currentValue).toBe(
++			"anthropic/claude-sonnet",
++		);
++
++		const changedThinking = await host.setConfigOption({
++			sessionId: "session-1",
++			configId: "thought_level",
++			value: "low",
++		});
++		expect(changedThinking.configOptions.find((option) => option.category === "thought_level")?.currentValue).toBe(
++			"low",
++		);
++		await expectInvalid(
++			host.setConfigOption({ sessionId: "session-1", configId: "thought_level", value: "extreme" }),
++		);
++		expect(hosted[0].setThinkingLevel).toHaveBeenCalledTimes(1);
++	});
++
++	it("rejects duplicate hosted IDs without replacing or leaking the new runtime", async () => {
++		const { host, hosted } = createPolicyHarness({ runtimeIds: ["session-1", "session-1"] });
++		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
++		expect(hosted[1].abort).toHaveBeenCalledTimes(1);
++		expect(hosted[1].flush).toHaveBeenCalledTimes(1);
++		expect(hosted[1].dispose).toHaveBeenCalledTimes(1);
++		expect(hosted[0].dispose).not.toHaveBeenCalled();
++	});
++
++	it("rejects loading an already-hosted ID before opening another runtime", async () => {
++		const { host, createRuntime } = createPolicyHarness({ listedId: "session-1" });
++		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expectInvalid(
++			host.loadSession({ cwd: "/tmp/project", sessionId: "session-1", mcpServers: [] }),
++		);
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++	});
++
++	it("aborts, flushes, and disposes each runtime exactly once across repeated disposal", async () => {
++		const { host, hosted } = createPolicyHarness();
++		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await host.dispose();
++		await host.dispose();
++		expect(hosted[0].abort).toHaveBeenCalledTimes(1);
++		expect(hosted[0].flush).toHaveBeenCalledTimes(1);
++		expect(hosted[0].dispose).toHaveBeenCalledTimes(1);
++		expect(hosted[0].abort.mock.invocationCallOrder[0]).toBeLessThan(hosted[0].flush.mock.invocationCallOrder[0]);
++		expect(hosted[0].flush.mock.invocationCallOrder[0]).toBeLessThan(hosted[0].dispose.mock.invocationCallOrder[0]);
 +	});
 +});
