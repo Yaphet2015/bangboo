@@ -296,10 +296,10 @@ index 00000000..430811e8
 +}
 diff --git a/packages/coding-agent/src/modes/acp/permission-gate.ts b/packages/coding-agent/src/modes/acp/permission-gate.ts
 new file mode 100644
-index 00000000..8dad6b20
+index 00000000..e3184081
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/permission-gate.ts
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,86 @@
 +import * as acp from "@agentclientprotocol/sdk";
 +import type { InlineExtension, ToolCallEvent } from "../../core/extensions/types.ts";
 +
@@ -358,6 +358,7 @@ index 00000000..8dad6b20
 +						options: OPTIONS,
 +					},
 +				)).then((response) => {
++					if (settled) return;
 +					const outcome = response?.outcome;
 +					if (outcome?.outcome !== "selected") return settle("deny");
 +					if (outcome.optionId === "allow_session") {
@@ -874,10 +875,10 @@ index 00000000..8a3ab46f
 +});
 diff --git a/packages/coding-agent/test/acp/permission-gate.test.ts b/packages/coding-agent/test/acp/permission-gate.test.ts
 new file mode 100644
-index 00000000..ca1623fb
+index 00000000..522d9b4b
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/permission-gate.test.ts
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,110 @@
 +import * as acp from "@agentclientprotocol/sdk";
 +import { describe, expect, it, vi } from "vitest";
 +import type { ExtensionAPI, ToolCallEvent, ToolCallEventResult } from "../../src/core/extensions/types.ts";
@@ -966,6 +967,26 @@ index 00000000..ca1623fb
 +			{ block: true, reason: "Tool execution denied by ACP client" },
 +			{ block: true, reason: "Tool execution denied by ACP client" },
 +		]);
++	});
++
++	it("does not cache a late allow-session response after cancellation", async () => {
++		let resolveRequest!: (response: unknown) => void;
++		const request = vi.fn()
++			.mockImplementationOnce(() => new Promise((resolve) => { resolveRequest = resolve; }))
++			.mockResolvedValueOnce({ outcome: { outcome: "selected", optionId: "deny" } });
++		const { broker, handler } = harness(request);
++		const first = handler(event("bash"));
++
++		await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
++		broker.cancelPending();
++		resolveRequest({ outcome: { outcome: "selected", optionId: "allow_session" } });
++
++		await expect(first).resolves.toEqual({ block: true, reason: "Tool execution denied by ACP client" });
++		await expect(handler(event("bash"))).resolves.toEqual({
++			block: true,
++			reason: "Tool execution denied by ACP client",
++		});
++		expect(request).toHaveBeenCalledTimes(2);
 +	});
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
