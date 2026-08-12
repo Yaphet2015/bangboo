@@ -3,11 +3,16 @@ import { withTemporaryFileContents } from "../../src/upstream-test-fixture.js";
 
 describe("withTemporaryFileContents", () => {
   test("restores the exact original when the temporary write fails", async () => {
-    const writes: string[] = [];
     const original = "upstream fixture\n";
+    let stored = original;
+    let writeCount = 0;
     const write = vi.fn(async (_path: string, content: string) => {
-      writes.push(content);
-      if (writes.length === 1) throw new Error("partial temporary write");
+      writeCount += 1;
+      if (writeCount === 1) {
+        stored = content.slice(0, 8);
+        throw new Error("partial temporary write");
+      }
+      stored = content;
     });
     const action = vi.fn(async () => undefined);
 
@@ -18,7 +23,8 @@ describe("withTemporaryFileContents", () => {
       }),
     ).rejects.toThrow("partial temporary write");
 
-    expect(writes).toEqual([`${original}stabilized\n`, original]);
+    expect(stored).toBe(original);
+    expect(write).toHaveBeenCalledTimes(2);
     expect(action).not.toHaveBeenCalled();
   });
 

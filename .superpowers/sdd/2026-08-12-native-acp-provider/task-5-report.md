@@ -29,14 +29,17 @@ Bounded retry completed in the required sequence on 2026-08-12:
 
 ## Review fix validation
 
-The approved validation policy allows upstream/pre-existing skips when explicitly reported. The completed pristine upstream run had 48 skipped tests (and 1657 passed); Bangboo's new integration/ACP suite had zero skips (22/22 passed).
+The approved validation policy allows upstream/pre-existing skips when explicitly reported. A fresh `npm run pack` completed the pristine upstream suite with 1657 passed and 48 skipped tests, then built and packed `bangboo-0.1.1.tgz` successfully.
 
-The fixture mutation is now entirely guarded by a reusable `withTemporaryFileContents` helper. Its failure-path tests prove byte-for-byte string restoration both when the temporary write rejects (including a partial-write simulation) and when the guarded upstream action rejects.
+The fixture mutation is now entirely guarded by a reusable `withTemporaryFileContents` helper. Its failure-path tests model a partially mutated backing value after the temporary write rejects and assert that the final value exactly equals the original; they also cover failure of the guarded upstream action.
 
-- `npm test -- --run test/unit/upstream-test-fixture.test.ts` — passed: 10 unit files / 23 tests, including both new restoration cases; zero skips.
+- `npm test -- --run test/unit/upstream-test-fixture.test.ts` — passed: 10 unit files / 23 tests, including both restoration cases; zero skips.
 - `npm run typecheck` — passed.
-- `npm run test:integration` — passed: 3 files / 22 tests; built and packed official ACP SDK smoke tests passed; zero skips.
+- `npm run test:integration` — passed: 3 files / 22 repository integration tests; built and packed official ACP SDK initialization smoke tests passed; zero skips.
+- `npm run pack` — passed: pristine upstream suite 180 files passed / 6 skipped and 1657 tests passed / 48 skipped; package build and pack succeeded.
+- `npm --prefix .bangboo-build/upstream/packages/coding-agent test -- test/acp --reporter=verbose` — passed directly after staging installed dependencies: all 5 ACP test files and all 38 ACP tests executed, with zero skips.
 
 Concerns:
 - Dependency installation reports one high-severity npm audit finding; this did not fail the required validation.
+- If restoration itself fails, that failure supersedes the original write/action error. This is intentionally fail-loud and avoids extra aggregation machinery, but can obscure the primary failure context.
 - The supplied root-level `context.md` and `plan.md` paths were absent from the worktree; the tracked implementation plan and Task 5 report were available.
