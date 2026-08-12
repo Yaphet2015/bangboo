@@ -98,9 +98,9 @@ A missing, corrupt, or workspace-incompatible session fails explicitly. Bangboo 
 
 ### Model and Thinking Selection
 
-`session/set_model` resolves an advertised Bangboo model ID and calls the Bangboo model-selection API. Unknown or unavailable models fail explicitly.
+`session/set_config_option` is the canonical ACP v1 selection surface. A config option with category `model` resolves an advertised Bangboo `provider/model` value and calls `session.setModel()`. A config option with category `thought_level` maps to `session.setThinkingLevel()`. Unknown models and unsupported levels fail instead of being silently accepted or clamped. The returned config state refreshes available thinking values after model selection changes.
 
-`session/set_config_option` accepts the advertised `thought_level` option and maps it to `session.setThinkingLevel()`. Unsupported levels fail instead of being silently clamped. The available values are refreshed when model selection changes.
+Bangboo does not implement the legacy non-standard `session/set_model` method. bb prefers the standard model config option when an agent advertises it and uses `session/set_model` only for older agents that expose session model state without a model config option.
 
 ### Prompting and Cancellation
 
