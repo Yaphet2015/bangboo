@@ -1610,3 +1610,140 @@ index 00000000..b80279b1
  	it("serializes notifications and sends known usage before resolving", async () => {
  		let concurrent = 0;
  		let maximum = 0;
+diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
+index 53c8f226..aec129a3 100644
+--- a/packages/coding-agent/src/modes/acp/acp-mode.ts
++++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
+@@ -17,11 +17,19 @@ export function createAcpAgentApp(options: AcpModeOptions = {}): acp.AgentApp {
+ 	};
+ 	return acp
+ 		.agent({ name: APP_NAME })
+-		.onRequest(acp.methods.agent.initialize, () => ({
+-			protocolVersion: acp.PROTOCOL_VERSION,
+-			agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
+-			agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
+-		}))
++		.onRequest(acp.methods.agent.initialize, ({ params }) => {
++			if (params.protocolVersion !== acp.PROTOCOL_VERSION) {
++				throw acp.RequestError.invalidParams(
++					{ protocolVersion: params.protocolVersion },
++					`Unsupported ACP protocol version; expected ${acp.PROTOCOL_VERSION}`,
++				);
++			}
++			return {
++				protocolVersion: acp.PROTOCOL_VERSION,
++				agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
++				agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
++			};
++		})
+ 		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
+ 		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
+ 		// ACP method: session/set_config_option
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+index 701c9cf6..770af1b5 100644
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -169,8 +169,8 @@ export function createBangbooSessionHost(options: {
+ 	}
+ 
+ 	function reserveSessionId(sessionId: string): void {
+-		if (sessions.has(sessionId) || reservedSessionIds.has(sessionId)) {
+-			throw acp.RequestError.invalidParams({ sessionId }, "Session ID is already hosted");
++		if (sessions.size > 0 || reservedSessionIds.size > 0) {
++			throw acp.RequestError.invalidParams({ sessionId }, "This ACP process already hosts a session");
+ 		}
+ 		reservedSessionIds.add(sessionId);
+ 	}
+diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
+index 172af7cc..e6b5d33b 100644
+--- a/packages/coding-agent/test/acp/acp-mode.test.ts
++++ b/packages/coding-agent/test/acp/acp-mode.test.ts
+@@ -20,6 +20,17 @@ describe("ACP mode", () => {
+ 		expect(initialize.agentCapabilities).toEqual({ loadSession: true, promptCapabilities: { image: true } });
+ 	});
+ 
++	it("rejects unsupported protocol versions", async () => {
++		await expect(
++			acp.client({ name: "test-client" }).connectWith(createAcpAgentApp(), (client) =>
++				client.request(acp.methods.agent.initialize, {
++					protocolVersion: 999,
++					clientCapabilities: {},
++				}),
++			),
++		).rejects.toMatchObject({ code: -32602 });
++	});
++
+ 	it("disposes an injected host exactly once when the connection closes", async () => {
+ 		const dispose = vi.fn(async () => {});
+ 		const host = {
+diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
+index 35e78fc9..6d4ddad3 100644
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -234,6 +234,66 @@ describe("Bangboo ACP session host policy", () => {
+ 		expect(hosted[0].setThinkingLevel).toHaveBeenCalledTimes(1);
+ 	});
+ 
++	it("rejects a second distinct hosted session without creating another runtime", async () => {
++		const { host, createRuntime } = createPolicyHarness({ runtimeIds: ["session-1", "session-2"] });
++		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++	});
++
++	it("releases the single-session reservation when runtime creation fails", async () => {
++		const hosted = createHostedSession("session-2");
++		const createRuntime = vi
++			.fn<() => Promise<ReturnType<typeof createHostedSession>>>()
++			.mockRejectedValueOnce(new Error("runtime failed"))
++			.mockResolvedValueOnce(hosted);
++		let managerIndex = 0;
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createRuntime,
++				createSessionManager: () =>
++					({ getSessionId: () => ["session-1", "session-2"][managerIndex++] }) as SessionManager,
++			},
++		});
++
++		await expect(host.newSession({ cwd: "/tmp/project", mcpServers: [] })).rejects.toThrow("runtime failed");
++		await expect(host.newSession({ cwd: "/tmp/project", mcpServers: [] })).resolves.toMatchObject({
++			sessionId: "session-2",
++		});
++		expect(createRuntime).toHaveBeenCalledTimes(2);
++	});
++
++	it("atomically rejects a concurrent distinct session without leaking a runtime", async () => {
++		const hosted = createHostedSession("session-1");
++		let releaseRuntime!: () => void;
++		const runtimeGate = new Promise<void>((resolve) => {
++			releaseRuntime = resolve;
++		});
++		const createRuntime = vi.fn(async () => {
++			await runtimeGate;
++			return hosted;
++		});
++		let managerIndex = 0;
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createRuntime,
++				createSessionManager: () =>
++					({ getSessionId: () => ["session-1", "session-2"][managerIndex++] }) as SessionManager,
++			},
++		});
++
++		const first = host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await vi.waitFor(() => expect(createRuntime).toHaveBeenCalledTimes(1));
++		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
++		releaseRuntime();
++		await first;
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++	});
++
+ 	it("atomically rejects concurrent duplicate creation without replacing or leaking a runtime", async () => {
+ 		const hosted = createHostedSession("session-1");
+ 		let releaseRuntime!: () => void;
