@@ -19,6 +19,7 @@
 - Permission uncertainty fails closed. Extensions remain trusted local code and are not sandboxed.
 - Do not commit `.bangboo-build/`; ship runtime source changes only through `patches/0009-native-acp-mode.patch`.
 - Do not modify bb or bump `HOST_DAEMON_PROTOCOL_VERSION` in this plan.
+- Upstream/pre-existing skipped tests are allowed when their count is reported explicitly; Bangboo's new ACP/integration tests must run with zero skips.
 
 ## File Map
 

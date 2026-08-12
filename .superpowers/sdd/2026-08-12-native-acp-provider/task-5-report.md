@@ -27,6 +27,16 @@ Bounded retry completed in the required sequence on 2026-08-12:
 - `npm run pack` — passed: pristine upstream suite reported 180 files passed / 6 skipped and 1657 tests passed / 48 skipped; package build and `npm pack` succeeded.
 - Artifact confirmed at `artifacts/bangboo-0.1.1.tgz` (4.6 MiB displayed by `ls -lh`; npm reported 4.9 MB package size, 923 files).
 
+## Review fix validation
+
+The approved validation policy allows upstream/pre-existing skips when explicitly reported. The completed pristine upstream run had 48 skipped tests (and 1657 passed); Bangboo's new integration/ACP suite had zero skips (22/22 passed).
+
+The fixture mutation is now entirely guarded by a reusable `withTemporaryFileContents` helper. Its failure-path tests prove byte-for-byte string restoration both when the temporary write rejects (including a partial-write simulation) and when the guarded upstream action rejects.
+
+- `npm test -- --run test/unit/upstream-test-fixture.test.ts` — passed: 10 unit files / 23 tests, including both new restoration cases; zero skips.
+- `npm run typecheck` — passed.
+- `npm run test:integration` — passed: 3 files / 22 tests; built and packed official ACP SDK smoke tests passed; zero skips.
+
 Concerns:
 - Dependency installation reports one high-severity npm audit finding; this did not fail the required validation.
-- The supplied `context.md` and `plan.md` paths were absent from the worktree during validation; the tracked Task 5 report and explicit validation contract were available.
+- The supplied root-level `context.md` and `plan.md` paths were absent from the worktree; the tracked implementation plan and Task 5 report were available.
