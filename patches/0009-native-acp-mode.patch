@@ -92,24 +92,41 @@ index 2d76c94a..70d19fe1 100644
  	}
 diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
 new file mode 100644
-index 00000000..17a77f42
+index 00000000..8d8ac89a
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,52 @@
 +import { Readable, Writable } from "node:stream";
 +import * as acp from "@agentclientprotocol/sdk";
++import { builtInExtensions } from "../../extensions/index.ts";
 +import { APP_NAME, VERSION } from "../../config.ts";
++import { createBangbooSessionHost, type AcpSessionHost } from "./session-host.ts";
 +
 +export interface AcpModeOptions {
 +	version?: string;
++	hostFactory?: (client: acp.AgentContext) => AcpSessionHost;
 +}
 +
-+export function createAcpAgentApp(options: AcpModeOptions): acp.AgentApp {
-+	return acp.agent({ name: APP_NAME }).onRequest(acp.methods.agent.initialize, () => ({
-+		protocolVersion: acp.PROTOCOL_VERSION,
-+		agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
-+		agentCapabilities: {},
-+	}));
++export function createAcpAgentApp(options: AcpModeOptions = {}): acp.AgentApp {
++	let host: AcpSessionHost | undefined;
++	const getHost = (client: acp.AgentContext): AcpSessionHost => {
++		host ??= options.hostFactory?.(client) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
++		return host;
++	};
++	return acp
++		.agent({ name: APP_NAME })
++		.onRequest(acp.methods.agent.initialize, () => ({
++			protocolVersion: acp.PROTOCOL_VERSION,
++			agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
++			agentCapabilities: { loadSession: true },
++		}))
++		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
++		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
++		.onRequest(acp.methods.agent.session.setConfigOption, ({ params, client }) =>
++			getHost(client).setConfigOption(params),
++		)
++		.onRequest(acp.methods.agent.session.prompt, ({ params, client }) => getHost(client).prompt(params))
++		.onNotification(acp.methods.agent.session.cancel, ({ params, client }) => getHost(client).cancel(params));
 +}
 +
 +export async function runAcpMode(options: AcpModeOptions = {}): Promise<void> {
@@ -117,8 +134,203 @@ index 00000000..17a77f42
 +		Writable.toWeb(process.stdout),
 +		Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
 +	);
-+	const connection = createAcpAgentApp(options).connect(stream);
-+	await connection.closed;
++	let host: AcpSessionHost | undefined;
++	const hostFactory =
++		options.hostFactory ??
++		((client: acp.AgentContext) => {
++			host ??= createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
++			return host;
++		});
++	const connection = createAcpAgentApp({ ...options, hostFactory }).connect(stream);
++	try {
++		await connection.closed;
++	} finally {
++		await host?.dispose();
++	}
++}
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+new file mode 100644
+index 00000000..ac34099d
+--- /dev/null
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -0,0 +1,178 @@
++import { isAbsolute, normalize, resolve } from "node:path";
++import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
++import type { Model } from "@earendil-works/pi-ai";
++import * as acp from "@agentclientprotocol/sdk";
++import { getAgentDir } from "../../config.ts";
++import {
++	createAgentSessionFromServices,
++	createAgentSessionServices,
++	type AgentSessionServices,
++} from "../../core/agent-session-services.ts";
++import type { AgentSession } from "../../core/agent-session.ts";
++import type { InlineExtension } from "../../core/extensions/types.ts";
++import { SessionManager } from "../../core/session-manager.ts";
++import { SettingsManager } from "../../core/settings-manager.ts";
++import { ProjectTrustStore } from "../../core/trust-manager.ts";
++
++interface HostedSession {
++	session: AgentSession;
++	services: AgentSessionServices;
++}
++
++export interface AcpSessionHost {
++	newSession(params: acp.NewSessionRequest): Promise<acp.NewSessionResponse>;
++	loadSession(params: acp.LoadSessionRequest): Promise<acp.LoadSessionResponse>;
++	setConfigOption(params: acp.SetSessionConfigOptionRequest): Promise<acp.SetSessionConfigOptionResponse>;
++	prompt(params: acp.PromptRequest): Promise<acp.PromptResponse>;
++	cancel(params: acp.CancelNotification): Promise<void>;
++	dispose(): Promise<void>;
++}
++
++function modelValue(model: Model<any>): string {
++	return `${model.provider}/${model.id}`;
++}
++
++export async function buildSessionConfig(
++	session: AgentSession,
++	models: readonly Model<any>[],
++): Promise<acp.SessionConfigOption[]> {
++	if (!session.model) {
++		throw acp.RequestError.authRequired(undefined, "No authenticated model is available. Configure a provider API key first.");
++	}
++	return [
++		{
++			type: "select",
++			id: "model",
++			name: "Model",
++			category: "model",
++			currentValue: modelValue(session.model),
++			options: models.map((model) => ({ value: modelValue(model), name: model.name })),
++		},
++		{
++			type: "select",
++			id: "thought_level",
++			name: "Thinking level",
++			category: "thought_level",
++			currentValue: session.thinkingLevel,
++			options: session.getAvailableThinkingLevels().map((level) => ({ value: level, name: level })),
++		},
++	];
++}
++
++function validateRequest(params: { cwd: string; mcpServers: acp.McpServer[]; additionalDirectories?: string[] }): string {
++	if (!isAbsolute(params.cwd)) {
++		throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session cwd must be an absolute path");
++	}
++	if (params.mcpServers.length > 0) {
++		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support MCP servers yet");
++	}
++	if ((params.additionalDirectories?.length ?? 0) > 0) {
++		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support additional workspace roots yet");
++	}
++	return resolve(params.cwd);
++}
++
++export function createBangbooSessionHost(options: {
++	client: acp.AgentContext;
++	extensionFactories: InlineExtension[];
++}): AcpSessionHost {
++	const sessions = new Map<string, HostedSession>();
++	let disposed = false;
++
++	async function createRuntime(cwd: string, sessionManager: SessionManager): Promise<HostedSession> {
++		const agentDir = getAgentDir();
++		const trustStore = new ProjectTrustStore(agentDir);
++		const settingsManager = SettingsManager.create(cwd, agentDir, {
++			projectTrusted: trustStore.get(cwd) === true,
++		});
++		const services = await createAgentSessionServices({
++			cwd,
++			agentDir,
++			settingsManager,
++			resourceLoaderOptions: { extensionFactories: options.extensionFactories },
++		});
++		const errors = services.diagnostics.filter((diagnostic) => diagnostic.type === "error");
++		if (errors.length > 0) {
++			await settingsManager.flush();
++			throw new Error(errors.map((diagnostic) => diagnostic.message).join("\n"));
++		}
++		const created = await createAgentSessionFromServices({ services, sessionManager });
++		const available = await services.modelRuntime.getAvailable();
++		if (!created.session.model || !available.some((model) => modelValue(model) === modelValue(created.session.model!))) {
++			created.session.dispose();
++			await settingsManager.flush();
++			throw acp.RequestError.authRequired(undefined, "No authenticated model is available. Configure a provider API key first.");
++		}
++		return { ...created, services };
++	}
++
++	async function config(hosted: HostedSession): Promise<acp.SessionConfigOption[]> {
++		return buildSessionConfig(hosted.session, await hosted.services.modelRuntime.getAvailable());
++	}
++
++	function getSession(sessionId: string): HostedSession {
++		const hosted = sessions.get(sessionId);
++		if (!hosted) throw acp.RequestError.invalidParams({ sessionId }, "Unknown session ID");
++		return hosted;
++	}
++
++	return {
++		async newSession(params) {
++			const cwd = validateRequest(params);
++			const hosted = await createRuntime(cwd, SessionManager.create(cwd));
++			const sessionId = hosted.session.sessionManager.getSessionId();
++			sessions.set(sessionId, hosted);
++			return { sessionId, configOptions: await config(hosted) };
++		},
++		async loadSession(params) {
++			const cwd = validateRequest(params);
++			const match = (await SessionManager.list(cwd)).find((entry) => entry.id === params.sessionId);
++			if (!match) throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown session ID");
++			if (normalize(resolve(match.cwd)) !== normalize(cwd)) {
++				throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session belongs to a different working directory");
++			}
++			const hosted = await createRuntime(cwd, SessionManager.open(match.path));
++			sessions.set(params.sessionId, hosted);
++			return { configOptions: await config(hosted) };
++		},
++		async setConfigOption(params) {
++			const hosted = getSession(params.sessionId);
++			if (typeof params.value !== "string") {
++				throw acp.RequestError.invalidParams({ configId: params.configId }, "Configuration value must be a string");
++			}
++			if (params.configId === "model") {
++				const available = await hosted.services.modelRuntime.getAvailable();
++				const model = available.find((candidate) => modelValue(candidate) === params.value);
++				if (!model) throw acp.RequestError.invalidParams({ value: params.value }, "Unknown or unauthenticated model");
++				await hosted.session.setModel(model);
++			} else if (params.configId === "thought_level") {
++				const levels = hosted.session.getAvailableThinkingLevels();
++				if (!levels.includes(params.value as ThinkingLevel)) {
++					throw acp.RequestError.invalidParams({ value: params.value }, "Unsupported thinking level for the selected model");
++				}
++				hosted.session.setThinkingLevel(params.value as ThinkingLevel);
++			} else {
++				throw acp.RequestError.invalidParams({ configId: params.configId }, "Unknown config option");
++			}
++			return { configOptions: await config(hosted) };
++		},
++		async prompt() {
++			throw acp.RequestError.methodNotFound(acp.methods.agent.session.prompt);
++		},
++		async cancel(params) {
++			await getSession(params.sessionId).session.abort();
++		},
++		async dispose() {
++			if (disposed) return;
++			disposed = true;
++			await Promise.all(
++				[...sessions.values()].map(async ({ session, services }) => {
++					await session.abort();
++					await services.settingsManager.flush();
++					session.dispose();
++				}),
++			);
++			sessions.clear();
++		},
++	};
 +}
 diff --git a/packages/coding-agent/src/modes/index.ts b/packages/coding-agent/src/modes/index.ts
 index 732aee55..c32a5b6b 100644
@@ -134,7 +346,7 @@ index 732aee55..c32a5b6b 100644
  export { type ModelInfo, RpcClient, type RpcClientOptions, type RpcEventListener } from "./rpc/rpc-client.ts";
 diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
 new file mode 100644
-index 00000000..d2780cd1
+index 00000000..66bda92b
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/acp-mode.test.ts
 @@ -0,0 +1,38 @@
@@ -144,7 +356,7 @@ index 00000000..d2780cd1
 +import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
 +
 +describe("ACP mode", () => {
-+	it("advertises only the stable protocol metadata before handlers exist", async () => {
++	it("advertises session loading after lifecycle handlers are registered", async () => {
 +		const initialize = await acp.client({ name: "test-client" }).connectWith(
 +			createAcpAgentApp({ version: "0.1.1" }),
 +			(client) =>
@@ -156,7 +368,7 @@ index 00000000..d2780cd1
 +
 +		expect(initialize.protocolVersion).toBe(acp.PROTOCOL_VERSION);
 +		expect(initialize.agentInfo).toMatchObject({ name: "bangboo", version: "0.1.1" });
-+		expect(initialize.agentCapabilities).toEqual({});
++		expect(initialize.agentCapabilities).toEqual({ loadSession: true });
 +	});
 +
 +	it("prints ACP help before normal interactive startup", async () => {
@@ -174,5 +386,54 @@ index 00000000..d2780cd1
 +			stderr.mockRestore();
 +			process.exitCode = previousExitCode;
 +		}
++	});
++});
+diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
+new file mode 100644
+index 00000000..077c9707
+--- /dev/null
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -0,0 +1,43 @@
++import * as acp from "@agentclientprotocol/sdk";
++import { describe, expect, it, vi } from "vitest";
++import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
++import type { AcpSessionHost } from "../../src/modes/acp/session-host.ts";
++
++function fakeHost(): AcpSessionHost {
++	return {
++		newSession: vi.fn(async () => ({ sessionId: "session-1", configOptions: [] })),
++		loadSession: vi.fn(async () => ({ configOptions: [] })),
++		setConfigOption: vi.fn(async () => ({ configOptions: [] })),
++		prompt: vi.fn(async () => ({ stopReason: "end_turn" })),
++		cancel: vi.fn(async () => {}),
++		dispose: vi.fn(async () => {}),
++	};
++}
++
++describe("ACP session lifecycle routing", () => {
++	it("routes standard session lifecycle and configuration methods", async () => {
++		const host = fakeHost();
++		const client = acp.client({ name: "test-client" });
++		await client.connectWith(createAcpAgentApp({ hostFactory: () => host }), async (agent) => {
++			await agent.request(acp.methods.agent.session.new, { cwd: "/tmp/project", mcpServers: [] });
++			await agent.request(acp.methods.agent.session.load, {
++				cwd: "/tmp/project",
++				sessionId: "session-1",
++				mcpServers: [],
++			});
++			await agent.request(acp.methods.agent.session.setConfigOption, {
++				sessionId: "session-1",
++				configId: "model",
++				value: "provider/model",
++			});
++		});
++
++		expect(host.newSession).toHaveBeenCalledWith({ cwd: "/tmp/project", mcpServers: [] });
++		expect(host.loadSession).toHaveBeenCalledWith({ cwd: "/tmp/project", sessionId: "session-1", mcpServers: [] });
++		expect(host.setConfigOption).toHaveBeenCalledWith({
++			sessionId: "session-1",
++			configId: "model",
++			value: "provider/model",
++		});
 +	});
 +});
