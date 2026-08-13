@@ -56,7 +56,7 @@ describe("built Bangboo CLI", () => {
 
     const { stdout } = await runCli(["--version"], project, home);
 
-    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.83.0, upstream v0.83.0)");
+    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.84.1, upstream v0.84.1)");
   });
 
   test("enables Bangboo first-run setup without an experimental flag", async () => {

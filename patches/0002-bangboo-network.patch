@@ -1,4 +1,5 @@
 diff --git a/packages/coding-agent/src/core/provider-attribution.ts b/packages/coding-agent/src/core/provider-attribution.ts
+index 3a541f52..703c3839 100644
 --- a/packages/coding-agent/src/core/provider-attribution.ts
 +++ b/packages/coding-agent/src/core/provider-attribution.ts
 @@ -43,21 +43,20 @@ function getDefaultAttributionHeaders(
@@ -36,25 +37,26 @@ diff --git a/packages/coding-agent/src/core/provider-attribution.ts b/packages/c
  
  export function mergeProviderAttributionHeaders(
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 720f9b0f..1945aec3 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -88,7 +88,6 @@ import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../cor
- import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+@@ -95,7 +95,6 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
+ import type { TuiMode } from "../../core/settings-manager.ts";
  import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
  import type { SourceInfo } from "../../core/source-info.ts";
 -import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
  import type { TruncationResult } from "../../core/tools/truncate.ts";
  import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
  import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-@@ -97,7 +96,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
- import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
+@@ -105,7 +104,6 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
  import { parseGitUrl } from "../../utils/git.ts";
+ import { openBrowser } from "../../utils/open-browser.ts";
  import { getCwdRelativePath } from "../../utils/paths.ts";
 -import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
  import { killTrackedDetachedChildren } from "../../utils/shell.ts";
  import { ensureTool } from "../../utils/tools-manager.ts";
  import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-@@ -999,41 +997,20 @@ export class InteractiveMode {
+@@ -1179,41 +1177,20 @@ export class InteractiveMode {
  		const entries = parseChangelog(changelogPath);
  
  		if (!lastVersion) {
@@ -97,7 +99,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  	private getMarkdownThemeWithSettings(): MarkdownTheme {
  		return {
  			...getMarkdownTheme(),
-@@ -3891,11 +3868,6 @@ export class InteractiveMode {
+@@ -4107,11 +4084,6 @@ export class InteractiveMode {
  	showNewVersionNotification(release: LatestPiRelease): void {
  		const action = theme.fg("accent", `${APP_NAME} update`);
  		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
@@ -109,7 +111,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		const note = release.note?.trim();
  
  		this.chatContainer.addChild(new Spacer(1));
-@@ -3912,7 +3884,6 @@ export class InteractiveMode {
+@@ -4128,7 +4100,6 @@ export class InteractiveMode {
  			);
  			this.chatContainer.addChild(new Spacer(1));
  		}
@@ -117,7 +119,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
  		this.ui.requestRender();
  	}
-@@ -5521,6 +5492,11 @@ export class InteractiveMode {
+@@ -5853,6 +5824,11 @@ export class InteractiveMode {
  	}
  
  	private async handleShareCommand(): Promise<void> {
@@ -129,7 +131,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		// Check if gh is available and logged in
  		try {
  			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-@@ -5605,6 +5581,10 @@ export class InteractiveMode {
+@@ -5937,6 +5913,10 @@ export class InteractiveMode {
  
  			// Create the preview URL
  			const previewUrl = getShareViewerUrl(gistId);
@@ -141,6 +143,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		} catch (error: unknown) {
  			if (!loader.signal.aborted) {
 diff --git a/packages/coding-agent/src/utils/pi-user-agent.ts b/packages/coding-agent/src/utils/pi-user-agent.ts
+index b1f0a726..10718b63 100644
 --- a/packages/coding-agent/src/utils/pi-user-agent.ts
 +++ b/packages/coding-agent/src/utils/pi-user-agent.ts
 @@ -1,4 +1,4 @@
@@ -150,10 +153,11 @@ diff --git a/packages/coding-agent/src/utils/pi-user-agent.ts b/packages/coding-
 +	return `bangboo/${version} (${process.platform}; ${runtime}; ${process.arch})`;
  }
 diff --git a/packages/coding-agent/src/utils/version-check.ts b/packages/coding-agent/src/utils/version-check.ts
+index a09a3d00..04357be1 100644
 --- a/packages/coding-agent/src/utils/version-check.ts
 +++ b/packages/coding-agent/src/utils/version-check.ts
-@@ -1,7 +1,7 @@
- import { compare, valid } from "semver";
+@@ -2,7 +2,7 @@ import { compare, valid } from "semver";
+ import { fetchWithRetry } from "./management-http.ts";
  import { getPiUserAgent } from "./pi-user-agent.ts";
  
 -const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
@@ -161,7 +165,7 @@ diff --git a/packages/coding-agent/src/utils/version-check.ts b/packages/coding-
  const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
  
  export interface LatestPiRelease {
-@@ -43,20 +43,15 @@ export async function getLatestPiRelease(
+@@ -70,20 +70,15 @@ export async function getLatestPiRelease(
  	if (!response.ok) return undefined;
  
  	const data = (await response.json()) as {

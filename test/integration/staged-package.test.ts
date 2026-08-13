@@ -26,9 +26,9 @@ describe("staged Bangboo package", () => {
       piConfig: { name: "bangboo", configDir: ".bangboo" },
       pi: { extensions: [], skills: [], prompts: [], themes: [] },
       bangboo: {
-        runtimeVersion: "0.83.0",
-        upstreamTag: "v0.83.0",
-        upstreamCommit: "845d6ff1f6643aba440341cce877ce1c43ebbc39",
+        runtimeVersion: "0.84.1",
+        upstreamTag: "v0.84.1",
+        upstreamCommit: "53fa77ccd8a279eb87e92294ef3687b03ff80112",
       },
       dependencies: { "@agentclientprotocol/sdk": "1.3.0" },
     });

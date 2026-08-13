@@ -1,7 +1,8 @@
 diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
+index 5ea1ee8f..354c6de0 100644
 --- a/packages/coding-agent/src/cli/args.ts
 +++ b/packages/coding-agent/src/cli/args.ts
-@@ -220,7 +220,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+@@ -236,7 +236,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
  					})
  					.join("\n")}\n`
  			: "";
@@ -10,7 +11,7 @@ diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/c
  
  ${chalk.bold("Usage:")}
    ${APP_NAME} [options] [@files...] [messages...]
-@@ -229,7 +229,7 @@ ${chalk.bold("Commands:")}
+@@ -245,7 +245,7 @@ ${chalk.bold("Commands:")}
    ${APP_NAME} install <source> [-l]     Install extension source and add to settings
    ${APP_NAME} remove <source> [-l]      Remove extension source from settings
    ${APP_NAME} uninstall <source> [-l]   Alias for remove
@@ -18,9 +19,9 @@ diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/c
 +  ${APP_NAME} update [source|self]      Update Bangboo, extensions, or model catalogs
    ${APP_NAME} list                      List installed extensions from settings
    ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-   ${APP_NAME} auth <command>            Print credentials for external clients
-@@ -274,7 +274,7 @@ ${chalk.bold("Options:")}
-   --verbose                      Force verbose startup (overrides quietStartup setting)
+   ${APP_NAME} auth <command>            Print credentials or check provider readiness
+@@ -291,7 +291,7 @@ ${chalk.bold("Options:")}
+   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
    --approve, -a                  Trust project-local files for this run
    --no-approve, -na              Ignore project-local files for this run
 -  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
@@ -28,7 +29,7 @@ diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/c
    --help, -h                     Show this help
    --version, -v                  Show version number
  
-@@ -383,10 +383,9 @@ ${chalk.bold("Environment Variables:")}
+@@ -401,10 +401,9 @@ ${chalk.bold("Environment Variables:")}
    AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
    ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
    ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
@@ -43,6 +44,7 @@ diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/c
  ${chalk.bold("Built-in Tool Names:")}
    read   - Read file contents
 diff --git a/packages/coding-agent/src/core/project-trust.ts b/packages/coding-agent/src/core/project-trust.ts
+index 2521ad5d..e8396297 100644
 --- a/packages/coding-agent/src/core/project-trust.ts
 +++ b/packages/coding-agent/src/core/project-trust.ts
 @@ -22,7 +22,7 @@ export interface ResolveProjectTrustedOptions {
@@ -55,6 +57,7 @@ diff --git a/packages/coding-agent/src/core/project-trust.ts b/packages/coding-a
  
  async function selectProjectTrustOption(
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 70d39216..ca42bb09 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -902,7 +902,7 @@ export class SessionManager {
@@ -67,6 +70,7 @@ diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding
  				this.newSession();
  				this.sessionFile = explicitPath;
 diff --git a/packages/coding-agent/src/core/system-prompt.ts b/packages/coding-agent/src/core/system-prompt.ts
+index 35f4ca40..6e37af13 100644
 --- a/packages/coding-agent/src/core/system-prompt.ts
 +++ b/packages/coding-agent/src/core/system-prompt.ts
 @@ -2,7 +2,7 @@
@@ -108,6 +112,7 @@ diff --git a/packages/coding-agent/src/core/system-prompt.ts b/packages/coding-a
  	if (appendSection) {
  		prompt += appendSection;
 diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
+index de5f76e0..7748430d 100644
 --- a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 @@ -71,7 +71,7 @@ export class FirstTimeSetupComponent extends Container {
@@ -120,6 +125,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-s
  					1,
  					0,
 diff --git a/packages/coding-agent/src/modes/interactive/external-editor.ts b/packages/coding-agent/src/modes/interactive/external-editor.ts
+index 45fb572f..f6072a75 100644
 --- a/packages/coding-agent/src/modes/interactive/external-editor.ts
 +++ b/packages/coding-agent/src/modes/interactive/external-editor.ts
 @@ -16,7 +16,7 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
@@ -132,9 +138,10 @@ diff --git a/packages/coding-agent/src/modes/interactive/external-editor.ts b/pa
  		// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
  		// Node/libuv's console input read active after the parent pauses stdin, racing
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 1945aec3..2174997a 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -767,7 +767,7 @@ export class InteractiveMode {
+@@ -944,7 +944,7 @@ export class InteractiveMode {
  			);
  			const onboarding = theme.fg(
  				"dim",
@@ -143,7 +150,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  			);
  			this.builtInHeader = new ExpandableText(
  				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-@@ -976,7 +976,7 @@ export class InteractiveMode {
+@@ -1156,7 +1156,7 @@ export class InteractiveMode {
  		}
  
  		if (extendedKeysFormat === "xterm") {
@@ -152,7 +159,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		}
  
  		return undefined;
-@@ -4416,7 +4416,7 @@ export class InteractiveMode {
+@@ -4690,7 +4690,7 @@ export class InteractiveMode {
  					trustStore.setMany(selection.updates);
  					done();
  					this.showStatus(
@@ -162,6 +169,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  				},
  				onCancel: () => {
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
+index aedfdf0b..c8abb20e 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
 @@ -83,7 +83,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
@@ -205,7 +213,7 @@ diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-
  `);
  			return;
  
-@@ -431,7 +431,7 @@ function printSelfUpdateUnavailable(
+@@ -432,7 +432,7 @@ function printSelfUpdateUnavailable(
  	const entrypoint = process.argv[1];
  	if (entrypoint) {
  		console.error("");

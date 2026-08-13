@@ -4,9 +4,9 @@ Bangboo incorporates the Pi runtime from:
   https://github.com/earendil-works/pi.git
 
 Initial runtime provenance:
-  Version: 0.83.0
-  Tag: v0.83.0
-  Commit: 845d6ff1f6643aba440341cce877ce1c43ebbc39
+  Version: 0.84.1
+  Tag: v0.84.1
+  Commit: 53fa77ccd8a279eb87e92294ef3687b03ff80112
 
 The Pi runtime is licensed under the MIT License:
   Copyright (c) 2025 Mario Zechner

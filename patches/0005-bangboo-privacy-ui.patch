@@ -1,15 +1,16 @@
 diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent/src/cli/startup-ui.ts
+index 37d6882e..2e66564f 100644
 --- a/packages/coding-agent/src/cli/startup-ui.ts
 +++ b/packages/coding-agent/src/cli/startup-ui.ts
 @@ -1,7 +1,6 @@
- import { ProcessTerminal, setKeybindings, TUI } from "@earendil-works/pi-tui";
+ import { ProcessTerminal, setKeybindings, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
  import { existsSync } from "fs";
  import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir, getSettingsPath, PACKAGE_NAME } from "../config.ts";
 -import { areExperimentalFeaturesEnabled } from "../core/experimental.ts";
  import { KeybindingsManager } from "../core/keybindings.ts";
  import { DefaultPackageManager, type ResolvedResource } from "../core/package-manager.ts";
  import { SettingsManager } from "../core/settings-manager.ts";
-@@ -23,20 +22,20 @@ import {
+@@ -23,9 +22,9 @@ import {
  	type Theme,
  } from "../modes/interactive/theme/theme.ts";
  
@@ -22,7 +23,7 @@ diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent
  
  interface DistributionMetadata {
  	packageName: string;
- 	appName: string;
+@@ -33,11 +32,11 @@ interface DistributionMetadata {
  	configDirName: string;
  }
  
@@ -37,6 +38,7 @@ diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent
 +		configDirName === BANGBOO_CONFIG_DIR_NAME
  	);
  }
+ 
 @@ -107,14 +106,13 @@ async function clearStartupTui(ui: TUI): Promise<void> {
  
  /**
@@ -54,7 +56,7 @@ diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent
  			packageName: PACKAGE_NAME,
  			appName: APP_NAME,
  			configDirName: CONFIG_DIR_NAME,
-@@ -120,9 +118,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
+@@ -122,9 +120,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
  	) {
  		return false;
  	}
@@ -65,9 +67,10 @@ diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent
  		return false;
  	}
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 2e9b32bf..afabeafc 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -566,7 +566,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -667,7 +667,7 @@ export async function main(args: string[], options?: MainOptions) {
  	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
  	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
  
@@ -77,9 +80,10 @@ diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.
  	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
  		await showFirstTimeSetup(startupSettingsManager);
 diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
+index 7748430d..0095bc32 100644
 --- a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
-@@ -23,10 +23,7 @@ const THEME_OPTIONS: Array<{ value: TerminalTheme; label: string }> = [
+@@ -21,10 +21,7 @@ const THEME_OPTIONS: Array<{ value: TerminalTheme; label: string }> = [
  	{ value: "light", label: "Light" },
  ];
  
@@ -91,7 +95,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-s
  
  const SETUP_LOGO_LINES = ["██████", "██  ██", "████  ██", "██    ██"];
  
-@@ -65,7 +62,7 @@ export class FirstTimeSetupComponent extends Container {
+@@ -66,7 +63,7 @@ export class FirstTimeSetupComponent extends Container {
  				this.themeIndex,
  			);
  		} else {
@@ -101,9 +105,10 @@ diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-s
  				new Text(
  					theme.fg(
 diff --git a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
+index c0c49f54..d645c500 100644
 --- a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
-@@ -545,13 +545,6 @@ export class SettingsSelector extends Container {
+@@ -564,13 +564,6 @@ export class SettingsSelectorComponent extends Container {
  				currentValue: config.quietStartup ? "true" : "false",
  				values: ["true", "false"],
  			},
@@ -117,7 +122,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/components/settings-sel
  			{
  				id: "default-project-trust",
  				label: "Default project trust",
-@@ -783,9 +776,6 @@ export class SettingsSelector extends Container {
+@@ -819,9 +812,6 @@ export class SettingsSelectorComponent extends Container {
  					case "quiet-startup":
  						callbacks.onQuietStartupChange(newValue === "true");
  						break;

@@ -53,6 +53,7 @@ async function copyOwnedFile(name: string): Promise<void> {
 async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   if (runtimeDependenciesBuilt) return;
   await run("npm", ["run", "build"], join(stageDir, "packages", "tui"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "telemetry"));
   const aiPackageDir = join(stageDir, "packages", "ai");
   await hydrateModelData({
     packageName: PI_AI_PACKAGE_NAME,
@@ -62,6 +63,8 @@ async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   await run("npm", ["run", "check:model-data"], aiPackageDir);
   await run("npm", ["run", "build:offline"], aiPackageDir);
   await run("npm", ["run", "build"], join(stageDir, "packages", "agent"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "protocol"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "client"));
   runtimeDependenciesBuilt = true;
 }
 
@@ -135,7 +138,7 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
       testArguments.push("--exclude", "test/suite/regressions/5303-bash-output-truncation.test.ts");
     }
     if (process.platform === "win32") {
-      // These pristine v0.83.0 tests encode POSIX permissions, signals, paths,
+      // These pristine v0.84.1 tests encode POSIX permissions, signals, paths,
       // or glob semantics and fail consistently on GitHub's Windows runner.
       // Linux/macOS execute them; Windows still runs every other upstream file.
       // Serial execution avoids overlapping watcher fixture teardown.

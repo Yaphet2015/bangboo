@@ -1,18 +1,18 @@
 diff --git a/package-lock.json b/package-lock.json
-index 197776a2..a945b91d 100644
+index 48e638d5..582de922 100644
 --- a/package-lock.json
 +++ b/package-lock.json
-@@ -5519,7 +5519,8 @@
+@@ -5560,7 +5560,8 @@
  				"semver": "7.8.0",
  				"typebox": "1.3.7",
- 				"undici": "8.5.0",
+ 				"undici": "8.9.0",
 -				"yaml": "2.9.0"
 +				"yaml": "2.9.0",
 +				"@agentclientprotocol/sdk": "1.3.0"
  			},
  			"bin": {
  				"pi": "dist/cli.js"
-@@ -5713,6 +5714,15 @@
+@@ -5801,6 +5802,15 @@
  			"engines": {
  				"node": ">=22.19.0"
  			}
@@ -30,7 +30,7 @@ index 197776a2..a945b91d 100644
  }
 diff --git a/packages/coding-agent/docs/acp.md b/packages/coding-agent/docs/acp.md
 new file mode 100644
-index 00000000..c18e53f9
+index 00000000..3ce182ad
 --- /dev/null
 +++ b/packages/coding-agent/docs/acp.md
 @@ -0,0 +1,24 @@
@@ -55,26 +55,26 @@ index 00000000..c18e53f9
 +
 +Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo.
 +
-+ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. Requests with non-empty MCP server lists are rejected.
++ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
 +
 +Extensions are trusted code running with the user's permissions. ACP tool permissions do not sandbox extensions; review installed extensions before starting ACP mode.
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
-index 74c9b7b8..ffce423e 100644
+index 09011799..7ff693cc 100644
 --- a/packages/coding-agent/package.json
 +++ b/packages/coding-agent/package.json
-@@ -53,6 +53,7 @@
+@@ -57,6 +57,7 @@
  		"prepublishOnly": "npm run clean && npm run build"
  	},
  	"dependencies": {
 +		"@agentclientprotocol/sdk": "1.3.0",
- 		"@earendil-works/pi-agent-core": "0.83.0",
- 		"@earendil-works/pi-ai": "0.83.0",
- 		"@earendil-works/pi-tui": "0.83.0",
+ 		"@earendil-works/pi-agent-core": "0.84.1",
+ 		"@earendil-works/pi-ai": "0.84.1",
+ 		"@earendil-works/pi-client": "0.84.1",
 diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
-index cddbe070..e32b5a2d 100644
+index 354c6de0..24364ffa 100644
 --- a/packages/coding-agent/src/cli/args.ts
 +++ b/packages/coding-agent/src/cli/args.ts
-@@ -226,6 +226,7 @@ ${chalk.bold("Usage:")}
+@@ -242,6 +242,7 @@ ${chalk.bold("Usage:")}
    ${APP_NAME} [options] [@files...] [messages...]
  
  ${chalk.bold("Commands:")}
@@ -83,10 +83,10 @@ index cddbe070..e32b5a2d 100644
    ${APP_NAME} remove <source> [-l]      Remove extension source from settings
    ${APP_NAME} uninstall <source> [-l]   Alias for remove
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 2d76c94a..70d19fe1 100644
+index afabeafc..d5d9e440 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -61,7 +61,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
+@@ -70,7 +70,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
  import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
  import { builtInExtensions } from "./extensions/index.ts";
  import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -95,7 +95,7 @@ index 2d76c94a..70d19fe1 100644
  import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
  import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
  import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
-@@ -525,6 +525,7 @@ async function promptForMissingSessionCwd(
+@@ -573,6 +573,7 @@ async function promptForMissingSessionCwd(
  
  export interface MainOptions {
  	extensionFactories?: InlineExtension[];
@@ -103,8 +103,8 @@ index 2d76c94a..70d19fe1 100644
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -536,6 +537,16 @@ export async function main(args: string[], options?: MainOptions) {
- 		process.env.PI_SKIP_VERSION_CHECK = "1";
+@@ -588,6 +589,16 @@ export async function main(args: string[], options?: MainOptions) {
+ 		return;
  	}
  
 +	if (args[0] === "acp") {
@@ -122,10 +122,10 @@ index 2d76c94a..70d19fe1 100644
  	}
 diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
 new file mode 100644
-index 00000000..53c8f226
+index 00000000..aec129a3
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,69 @@
 +import { Readable, Writable } from "node:stream";
 +import * as acp from "@agentclientprotocol/sdk";
 +import { builtInExtensions } from "../../extensions/index.ts";
@@ -145,11 +145,19 @@ index 00000000..53c8f226
 +	};
 +	return acp
 +		.agent({ name: APP_NAME })
-+		.onRequest(acp.methods.agent.initialize, () => ({
-+			protocolVersion: acp.PROTOCOL_VERSION,
-+			agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
-+			agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
-+		}))
++		.onRequest(acp.methods.agent.initialize, ({ params }) => {
++			if (params.protocolVersion !== acp.PROTOCOL_VERSION) {
++				throw acp.RequestError.invalidParams(
++					{ protocolVersion: params.protocolVersion },
++					`Unsupported ACP protocol version; expected ${acp.PROTOCOL_VERSION}`,
++				);
++			}
++			return {
++				protocolVersion: acp.PROTOCOL_VERSION,
++				agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
++				agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
++			};
++		})
 +		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
 +		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
 +		// ACP method: session/set_config_option
@@ -419,10 +427,10 @@ index 00000000..e3184081
 +}
 diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
 new file mode 100644
-index 00000000..c58530dc
+index 00000000..770af1b5
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,322 @@
 +import { isAbsolute, normalize, resolve } from "node:path";
 +import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 +import type { Model } from "@earendil-works/pi-ai";
@@ -518,9 +526,6 @@ index 00000000..c58530dc
 +	if (!isAbsolute(params.cwd)) {
 +		throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session cwd must be an absolute path");
 +	}
-+	if (params.mcpServers.length > 0) {
-+		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support MCP servers yet");
-+	}
 +	if ((params.additionalDirectories?.length ?? 0) > 0) {
 +		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support additional workspace roots yet");
 +	}
@@ -597,8 +602,8 @@ index 00000000..c58530dc
 +	}
 +
 +	function reserveSessionId(sessionId: string): void {
-+		if (sessions.has(sessionId) || reservedSessionIds.has(sessionId)) {
-+			throw acp.RequestError.invalidParams({ sessionId }, "Session ID is already hosted");
++		if (sessions.size > 0 || reservedSessionIds.size > 0) {
++			throw acp.RequestError.invalidParams({ sessionId }, "This ACP process already hosts a session");
 +		}
 +		reservedSessionIds.add(sessionId);
 +	}
@@ -749,7 +754,7 @@ index 00000000..c58530dc
 +	};
 +}
 diff --git a/packages/coding-agent/src/modes/index.ts b/packages/coding-agent/src/modes/index.ts
-index 732aee55..c32a5b6b 100644
+index ce860b07..4fcc5e0a 100644
 --- a/packages/coding-agent/src/modes/index.ts
 +++ b/packages/coding-agent/src/modes/index.ts
 @@ -2,6 +2,7 @@
@@ -758,14 +763,14 @@ index 732aee55..c32a5b6b 100644
  
 +export { createAcpAgentApp, type AcpModeOptions, runAcpMode } from "./acp/acp-mode.ts";
  export { InteractiveMode, type InteractiveModeOptions } from "./interactive/interactive-mode.ts";
+ export type { JsonAgentSessionEvent } from "./json-event.ts";
  export { type PrintModeOptions, runPrintMode } from "./print-mode.ts";
- export { type ModelInfo, RpcClient, type RpcClientOptions, type RpcEventListener } from "./rpc/rpc-client.ts";
 diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
 new file mode 100644
-index 00000000..172af7cc
+index 00000000..e6b5d33b
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/acp-mode.test.ts
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,72 @@
 +import * as acp from "@agentclientprotocol/sdk";
 +import { describe, expect, it, vi } from "vitest";
 +import { main } from "../../src/main.ts";
@@ -786,6 +791,17 @@ index 00000000..172af7cc
 +		expect(initialize.protocolVersion).toBe(acp.PROTOCOL_VERSION);
 +		expect(initialize.agentInfo).toMatchObject({ name: "bangboo", version: "0.1.1" });
 +		expect(initialize.agentCapabilities).toEqual({ loadSession: true, promptCapabilities: { image: true } });
++	});
++
++	it("rejects unsupported protocol versions", async () => {
++		await expect(
++			acp.client({ name: "test-client" }).connectWith(createAcpAgentApp(), (client) =>
++				client.request(acp.methods.agent.initialize, {
++					protocolVersion: 999,
++					clientCapabilities: {},
++				}),
++			),
++		).rejects.toMatchObject({ code: -32602 });
 +	});
 +
 +	it("disposes an injected host exactly once when the connection closes", async () => {
@@ -1022,10 +1038,10 @@ index 00000000..522d9b4b
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
 new file mode 100644
-index 00000000..b80279b1
+index 00000000..6d4ddad3
 --- /dev/null
 +++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,584 @@
 +import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
@@ -1197,19 +1213,25 @@ index 00000000..b80279b1
 +});
 +
 +describe("Bangboo ACP session host policy", () => {
-+	it("rejects relative cwd, MCP servers, and additional roots before runtime creation", async () => {
++	it("rejects relative cwd and additional roots before runtime creation", async () => {
 +		const { host, createRuntime } = createPolicyHarness();
 +		await expectInvalid(host.newSession({ cwd: "relative", mcpServers: [] }));
-+		await expectInvalid(
-+			host.newSession({
-+				cwd: "/tmp/project",
-+				mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
-+			}),
-+		);
 +		await expectInvalid(
 +			host.newSession({ cwd: "/tmp/project", mcpServers: [], additionalDirectories: ["/tmp/other"] }),
 +		);
 +		expect(createRuntime).not.toHaveBeenCalled();
++	});
++
++	it("accepts MCP metadata without adding MCP extensions", async () => {
++		const { host, createRuntime, hosted } = createPolicyHarness();
++		await host.newSession({
++			cwd: "/tmp/project",
++			mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
++		});
++
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(1);
++		expect(hosted).toHaveLength(1);
 +	});
 +
 +	it("rejects unknown IDs and sessions belonging to another cwd", async () => {
@@ -1254,6 +1276,66 @@ index 00000000..b80279b1
 +			host.setConfigOption({ sessionId: "session-1", configId: "thought_level", value: "extreme" }),
 +		);
 +		expect(hosted[0].setThinkingLevel).toHaveBeenCalledTimes(1);
++	});
++
++	it("rejects a second distinct hosted session without creating another runtime", async () => {
++		const { host, createRuntime } = createPolicyHarness({ runtimeIds: ["session-1", "session-2"] });
++		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
++		expect(createRuntime).toHaveBeenCalledTimes(1);
++	});
++
++	it("releases the single-session reservation when runtime creation fails", async () => {
++		const hosted = createHostedSession("session-2");
++		const createRuntime = vi
++			.fn<() => Promise<ReturnType<typeof createHostedSession>>>()
++			.mockRejectedValueOnce(new Error("runtime failed"))
++			.mockResolvedValueOnce(hosted);
++		let managerIndex = 0;
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createRuntime,
++				createSessionManager: () =>
++					({ getSessionId: () => ["session-1", "session-2"][managerIndex++] }) as SessionManager,
++			},
++		});
++
++		await expect(host.newSession({ cwd: "/tmp/project", mcpServers: [] })).rejects.toThrow("runtime failed");
++		await expect(host.newSession({ cwd: "/tmp/project", mcpServers: [] })).resolves.toMatchObject({
++			sessionId: "session-2",
++		});
++		expect(createRuntime).toHaveBeenCalledTimes(2);
++	});
++
++	it("atomically rejects a concurrent distinct session without leaking a runtime", async () => {
++		const hosted = createHostedSession("session-1");
++		let releaseRuntime!: () => void;
++		const runtimeGate = new Promise<void>((resolve) => {
++			releaseRuntime = resolve;
++		});
++		const createRuntime = vi.fn(async () => {
++			await runtimeGate;
++			return hosted;
++		});
++		let managerIndex = 0;
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createRuntime,
++				createSessionManager: () =>
++					({ getSessionId: () => ["session-1", "session-2"][managerIndex++] }) as SessionManager,
++			},
++		});
++
++		const first = host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await vi.waitFor(() => expect(createRuntime).toHaveBeenCalledTimes(1));
++		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
++		releaseRuntime();
++		await first;
++		expect(createRuntime).toHaveBeenCalledTimes(1);
 +	});
 +
 +	it("atomically rejects concurrent duplicate creation without replacing or leaking a runtime", async () => {
@@ -1462,6 +1544,19 @@ index 00000000..b80279b1
 +		return { host, session, notify };
 +	}
 +
++	it("prompts normally when MCP metadata is ignored", async () => {
++		const harness = createPromptHarness();
++		await harness.host.newSession({
++			cwd: "/tmp/project",
++			mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
++		});
++
++		await expect(
++			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] }),
++		).resolves.toEqual({ stopReason: "end_turn" });
++		expect(harness.session.prompt).toHaveBeenCalledWith("go", { images: [], source: "rpc" });
++	});
++
 +	it("serializes notifications and sends known usage before resolving", async () => {
 +		let concurrent = 0;
 +		let maximum = 0;
@@ -1531,219 +1626,3 @@ index 00000000..b80279b1
 +		expect(harness.session.abort).not.toHaveBeenCalled();
 +	});
 +});
---- a/packages/coding-agent/src/modes/acp/session-host.ts
-+++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -93,9 +93,6 @@
- 	if (!isAbsolute(params.cwd)) {
- 		throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session cwd must be an absolute path");
- 	}
--	if (params.mcpServers.length > 0) {
--		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support MCP servers yet");
--	}
- 	if ((params.additionalDirectories?.length ?? 0) > 0) {
- 		throw acp.RequestError.invalidParams(undefined, "Bangboo ACP does not support additional workspace roots yet");
- 	}
---- a/packages/coding-agent/test/acp/session-host.test.ts
-+++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -169,19 +169,25 @@
- });
- 
- describe("Bangboo ACP session host policy", () => {
--	it("rejects relative cwd, MCP servers, and additional roots before runtime creation", async () => {
-+	it("rejects relative cwd and additional roots before runtime creation", async () => {
- 		const { host, createRuntime } = createPolicyHarness();
- 		await expectInvalid(host.newSession({ cwd: "relative", mcpServers: [] }));
- 		await expectInvalid(
--			host.newSession({
--				cwd: "/tmp/project",
--				mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
--			}),
--		);
--		await expectInvalid(
- 			host.newSession({ cwd: "/tmp/project", mcpServers: [], additionalDirectories: ["/tmp/other"] }),
- 		);
- 		expect(createRuntime).not.toHaveBeenCalled();
-+	});
-+
-+	it("accepts MCP metadata without adding MCP extensions", async () => {
-+		const { host, createRuntime, hosted } = createPolicyHarness();
-+		await host.newSession({
-+			cwd: "/tmp/project",
-+			mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
-+		});
-+
-+		expect(createRuntime).toHaveBeenCalledTimes(1);
-+		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(1);
-+		expect(hosted).toHaveLength(1);
- 	});
- 
- 	it("rejects unknown IDs and sessions belonging to another cwd", async () => {
---- a/packages/coding-agent/docs/acp.md
-+++ b/packages/coding-agent/docs/acp.md
-@@ -19,6 +19,6 @@
- 
- Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo.
- 
--ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. Requests with non-empty MCP server lists are rejected.
-+ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
- 
- Extensions are trusted code running with the user's permissions. ACP tool permissions do not sandbox extensions; review installed extensions before starting ACP mode.
---- a/packages/coding-agent/test/acp/session-host.test.ts
-+++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -440,6 +440,19 @@
- 		return { host, session, notify };
- 	}
- 
-+	it("prompts normally when MCP metadata is ignored", async () => {
-+		const harness = createPromptHarness();
-+		await harness.host.newSession({
-+			cwd: "/tmp/project",
-+			mcpServers: [{ name: "server", command: "/bin/true", args: [], env: [] }],
-+		});
-+
-+		await expect(
-+			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] }),
-+		).resolves.toEqual({ stopReason: "end_turn" });
-+		expect(harness.session.prompt).toHaveBeenCalledWith("go", { images: [], source: "rpc" });
-+	});
-+
- 	it("serializes notifications and sends known usage before resolving", async () => {
- 		let concurrent = 0;
- 		let maximum = 0;
-diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
-index 53c8f226..aec129a3 100644
---- a/packages/coding-agent/src/modes/acp/acp-mode.ts
-+++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
-@@ -17,11 +17,19 @@ export function createAcpAgentApp(options: AcpModeOptions = {}): acp.AgentApp {
- 	};
- 	return acp
- 		.agent({ name: APP_NAME })
--		.onRequest(acp.methods.agent.initialize, () => ({
--			protocolVersion: acp.PROTOCOL_VERSION,
--			agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
--			agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
--		}))
-+		.onRequest(acp.methods.agent.initialize, ({ params }) => {
-+			if (params.protocolVersion !== acp.PROTOCOL_VERSION) {
-+				throw acp.RequestError.invalidParams(
-+					{ protocolVersion: params.protocolVersion },
-+					`Unsupported ACP protocol version; expected ${acp.PROTOCOL_VERSION}`,
-+				);
-+			}
-+			return {
-+				protocolVersion: acp.PROTOCOL_VERSION,
-+				agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
-+				agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
-+			};
-+		})
- 		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
- 		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
- 		// ACP method: session/set_config_option
-diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
-index 701c9cf6..770af1b5 100644
---- a/packages/coding-agent/src/modes/acp/session-host.ts
-+++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -169,8 +169,8 @@ export function createBangbooSessionHost(options: {
- 	}
- 
- 	function reserveSessionId(sessionId: string): void {
--		if (sessions.has(sessionId) || reservedSessionIds.has(sessionId)) {
--			throw acp.RequestError.invalidParams({ sessionId }, "Session ID is already hosted");
-+		if (sessions.size > 0 || reservedSessionIds.size > 0) {
-+			throw acp.RequestError.invalidParams({ sessionId }, "This ACP process already hosts a session");
- 		}
- 		reservedSessionIds.add(sessionId);
- 	}
-diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
-index 172af7cc..e6b5d33b 100644
---- a/packages/coding-agent/test/acp/acp-mode.test.ts
-+++ b/packages/coding-agent/test/acp/acp-mode.test.ts
-@@ -20,6 +20,17 @@ describe("ACP mode", () => {
- 		expect(initialize.agentCapabilities).toEqual({ loadSession: true, promptCapabilities: { image: true } });
- 	});
- 
-+	it("rejects unsupported protocol versions", async () => {
-+		await expect(
-+			acp.client({ name: "test-client" }).connectWith(createAcpAgentApp(), (client) =>
-+				client.request(acp.methods.agent.initialize, {
-+					protocolVersion: 999,
-+					clientCapabilities: {},
-+				}),
-+			),
-+		).rejects.toMatchObject({ code: -32602 });
-+	});
-+
- 	it("disposes an injected host exactly once when the connection closes", async () => {
- 		const dispose = vi.fn(async () => {});
- 		const host = {
-diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
-index 35e78fc9..6d4ddad3 100644
---- a/packages/coding-agent/test/acp/session-host.test.ts
-+++ b/packages/coding-agent/test/acp/session-host.test.ts
-@@ -234,6 +234,66 @@ describe("Bangboo ACP session host policy", () => {
- 		expect(hosted[0].setThinkingLevel).toHaveBeenCalledTimes(1);
- 	});
- 
-+	it("rejects a second distinct hosted session without creating another runtime", async () => {
-+		const { host, createRuntime } = createPolicyHarness({ runtimeIds: ["session-1", "session-2"] });
-+		await host.newSession({ cwd: "/tmp/project", mcpServers: [] });
-+		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
-+		expect(createRuntime).toHaveBeenCalledTimes(1);
-+	});
-+
-+	it("releases the single-session reservation when runtime creation fails", async () => {
-+		const hosted = createHostedSession("session-2");
-+		const createRuntime = vi
-+			.fn<() => Promise<ReturnType<typeof createHostedSession>>>()
-+			.mockRejectedValueOnce(new Error("runtime failed"))
-+			.mockResolvedValueOnce(hosted);
-+		let managerIndex = 0;
-+		const host = createBangbooSessionHost({
-+			client: {} as acp.AgentContext,
-+			extensionFactories: [],
-+			dependencies: {
-+				createRuntime,
-+				createSessionManager: () =>
-+					({ getSessionId: () => ["session-1", "session-2"][managerIndex++] }) as SessionManager,
-+			},
-+		});
-+
-+		await expect(host.newSession({ cwd: "/tmp/project", mcpServers: [] })).rejects.toThrow("runtime failed");
-+		await expect(host.newSession({ cwd: "/tmp/project", mcpServers: [] })).resolves.toMatchObject({
-+			sessionId: "session-2",
-+		});
-+		expect(createRuntime).toHaveBeenCalledTimes(2);
-+	});
-+
-+	it("atomically rejects a concurrent distinct session without leaking a runtime", async () => {
-+		const hosted = createHostedSession("session-1");
-+		let releaseRuntime!: () => void;
-+		const runtimeGate = new Promise<void>((resolve) => {
-+			releaseRuntime = resolve;
-+		});
-+		const createRuntime = vi.fn(async () => {
-+			await runtimeGate;
-+			return hosted;
-+		});
-+		let managerIndex = 0;
-+		const host = createBangbooSessionHost({
-+			client: {} as acp.AgentContext,
-+			extensionFactories: [],
-+			dependencies: {
-+				createRuntime,
-+				createSessionManager: () =>
-+					({ getSessionId: () => ["session-1", "session-2"][managerIndex++] }) as SessionManager,
-+			},
-+		});
-+
-+		const first = host.newSession({ cwd: "/tmp/project", mcpServers: [] });
-+		await vi.waitFor(() => expect(createRuntime).toHaveBeenCalledTimes(1));
-+		await expectInvalid(host.newSession({ cwd: "/tmp/project", mcpServers: [] }));
-+		releaseRuntime();
-+		await first;
-+		expect(createRuntime).toHaveBeenCalledTimes(1);
-+	});
-+
- 	it("atomically rejects concurrent duplicate creation without replacing or leaking a runtime", async () => {
- 		const hosted = createHostedSession("session-1");
- 		let releaseRuntime!: () => void;

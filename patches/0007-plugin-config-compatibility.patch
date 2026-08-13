@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
-index ca6ee52b..191d2c59 100644
+index 2a3fe31d..09011799 100644
 --- a/packages/coding-agent/package.json
 +++ b/packages/coding-agent/package.json
-@@ -35,6 +35,7 @@
+@@ -39,6 +39,7 @@
  	},
  	"files": [
  		"dist",
@@ -63,18 +63,18 @@ index 1ceab76b..7d5874fb 100644
 +
  await import("./cli.ts");
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index 252234b0..16ad735c 100644
+index c8abb20e..e50c26b8 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
-@@ -23,6 +23,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
+@@ -25,6 +25,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
  import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
  import { spawnProcess } from "./utils/child-process.ts";
- import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
+ import { formatVersionCheckError, getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
 +import { scanPackageForHardcodedPi } from "./utils/plugin-compatibility-scan.ts";
  import {
  	cleanupWindowsSelfUpdateQuarantine,
  	quarantineWindowsNativeDependencies,
-@@ -74,6 +75,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
+@@ -76,6 +77,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
  	}
  }
  
@@ -139,7 +139,7 @@ index 252234b0..16ad735c 100644
  function getPackageCommandUsage(command: PackageCommand): string {
  	switch (command) {
  		case "install":
-@@ -705,6 +764,7 @@ export async function handlePackageCommand(
+@@ -768,6 +827,7 @@ export async function handlePackageCommand(
  			case "install":
  				await packageManager.installAndPersist(source!, { local: options.local });
  				console.log(chalk.green(`Installed ${source}`));
