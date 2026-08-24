@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Removed built-in provider usage statusline. Use a user-installed provider usage extension instead.
+- Added `setStatus(..., { align: "right" })` so footer statuses can sit under the provider and model.
 
 ## 0.1.1
 

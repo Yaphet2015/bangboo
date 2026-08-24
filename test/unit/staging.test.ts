@@ -24,6 +24,6 @@ describe("buildStagingCommands", () => {
     const patchDir = new URL("../../patches/", import.meta.url);
     const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
 
-    expect(patches.at(-1)).toBe("0008-native-acp-mode.patch");
+    expect(patches.at(-1)).toBe("0009-footer-status-align.patch");
   });
 });

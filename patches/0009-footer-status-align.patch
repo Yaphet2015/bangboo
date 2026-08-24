@@ -1,0 +1,482 @@
+diff --git a/packages/coding-agent/docs/extensions.md b/packages/coding-agent/docs/extensions.md
+index 00e92a1d..4d1ea5e2 100644
+--- a/packages/coding-agent/docs/extensions.md
++++ b/packages/coding-agent/docs/extensions.md
+@@ -2554,6 +2554,7 @@ See [examples/extensions/timed-confirm.ts](../examples/extensions/timed-confirm.
+ ```typescript
+ // Status in footer (persistent until cleared)
+ ctx.ui.setStatus("my-ext", "Processing...");
++ctx.ui.setStatus("my-ext", "72% weekly", { align: "right" });
+ ctx.ui.setStatus("my-ext", undefined);  // Clear
+ 
+ // Working loader (shown during streaming)
+diff --git a/packages/coding-agent/docs/rpc.md b/packages/coding-agent/docs/rpc.md
+index 499ca673..0bf574c4 100644
+--- a/packages/coding-agent/docs/rpc.md
++++ b/packages/coding-agent/docs/rpc.md
+@@ -1260,11 +1260,12 @@ Set or clear a status entry in the footer/status bar. Fire-and-forget.
+   "id": "uuid-6",
+   "method": "setStatus",
+   "statusKey": "my-ext",
+-  "statusText": "Turn 3 running..."
++  "statusText": "Turn 3 running...",
++  "statusAlign": "right"
+ }
+ ```
+ 
+-Send `statusText: undefined` (or omit it) to clear the status entry for that key.
++Send `statusText: undefined` (or omit it) to clear the status entry for that key. `statusAlign` is optional and may be `"left"` or `"right"`. It defaults to `"left"`.
+ 
+ #### setWidget
+ 
+diff --git a/packages/coding-agent/docs/tui.md b/packages/coding-agent/docs/tui.md
+index d9f78929..d7d0c2ed 100644
+--- a/packages/coding-agent/docs/tui.md
++++ b/packages/coding-agent/docs/tui.md
+@@ -752,6 +752,7 @@ Show status in the footer that persists across renders. Good for mode indicators
+ ```typescript
+ // Set status (shown in footer)
+ ctx.ui.setStatus("my-ext", ctx.ui.theme.fg("accent", "● active"));
++ctx.ui.setStatus("quota", "[weekly] 84% in 4d 7h", { align: "right" });
+ 
+ // Clear status
+ ctx.ui.setStatus("my-ext", undefined);
+@@ -829,6 +830,7 @@ ctx.ui.setFooter((tui, theme, footerData) => ({
+   render(width: number): string[] {
+     // footerData.getGitBranch(): string | null
+     // footerData.getExtensionStatuses(): ReadonlyMap<string, string>
++    // footerData.getExtensionStatusItems(): ReadonlyMap<string, { text: string; align: "left" | "right" }>
+     return [`${ctx.model?.id} (${footerData.getGitBranch() || "no git"})`];
+   },
+   dispose: footerData.onBranchChange(() => tui.requestRender()), // reactive
+diff --git a/packages/coding-agent/examples/extensions/custom-footer.ts b/packages/coding-agent/examples/extensions/custom-footer.ts
+index 15e41e06..f58acac8 100644
+--- a/packages/coding-agent/examples/extensions/custom-footer.ts
++++ b/packages/coding-agent/examples/extensions/custom-footer.ts
+@@ -4,6 +4,7 @@
+  * footerData exposes data not otherwise accessible:
+  * - getGitBranch(): current git branch
+  * - getExtensionStatuses(): texts from ctx.ui.setStatus()
++ * - getExtensionStatusItems(): texts and alignments from ctx.ui.setStatus()
+  *
+  * Token stats come from ctx.sessionManager/ctx.model (already accessible).
+  */
+diff --git a/packages/coding-agent/src/core/extensions/index.ts b/packages/coding-agent/src/core/extensions/index.ts
+index f8841aa8..85839654 100644
+--- a/packages/coding-agent/src/core/extensions/index.ts
++++ b/packages/coding-agent/src/core/extensions/index.ts
+@@ -75,6 +75,9 @@ export type {
+ 	// Runtime
+ 	ExtensionRuntime,
+ 	ExtensionShortcut,
++	ExtensionStatusAlign,
++	ExtensionStatusItem,
++	ExtensionStatusOptions,
+ 	ExtensionUIContext,
+ 	ExtensionUIDialogOptions,
+ 	ExtensionWidgetOptions,
+diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
+index a87322ce..04cbd30c 100644
+--- a/packages/coding-agent/src/core/extensions/types.ts
++++ b/packages/coding-agent/src/core/extensions/types.ts
+@@ -50,7 +50,9 @@ import type { BashResult } from "../bash-executor.ts";
+ import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
+ import type { EventBus } from "../event-bus.ts";
+ import type { ExecOptions, ExecResult } from "../exec.ts";
+-import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
++import type { ExtensionStatusOptions, ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
++
++export type { ExtensionStatusAlign, ExtensionStatusItem, ExtensionStatusOptions } from "../footer-data-provider.ts";
+ import type { KeybindingsManager } from "../keybindings.ts";
+ import type { CustomMessage } from "../messages.ts";
+ import type { ModelRegistry } from "../model-registry.ts";
+@@ -145,7 +147,7 @@ export interface ExtensionUIContext {
+ 	onTerminalInput(handler: TerminalInputHandler): () => void;
+ 
+ 	/** Set status text in the footer/status bar. Pass undefined to clear. */
+-	setStatus(key: string, text: string | undefined): void;
++	setStatus(key: string, text: string | undefined, options?: ExtensionStatusOptions): void;
+ 
+ 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
+ 	setWorkingMessage(message?: string): void;
+diff --git a/packages/coding-agent/src/core/footer-data-provider.ts b/packages/coding-agent/src/core/footer-data-provider.ts
+index edee25ca..e726a180 100644
+--- a/packages/coding-agent/src/core/footer-data-provider.ts
++++ b/packages/coding-agent/src/core/footer-data-provider.ts
+@@ -92,6 +92,17 @@ function shouldPollGitHead(repoDir: string): boolean {
+ 	return isWslEnvironment() && isWindowsMountedRepoPath(repoDir);
+ }
+ 
++export type ExtensionStatusAlign = "left" | "right";
++
++export interface ExtensionStatusOptions {
++	align?: ExtensionStatusAlign;
++}
++
++export interface ExtensionStatusItem {
++	text: string;
++	align: ExtensionStatusAlign;
++}
++
+ /**
+  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
+  * Token stats, model info available via ctx.sessionManager and ctx.model.
+@@ -100,7 +111,7 @@ export class FooterDataProvider {
+ 	private cwd: string;
+ 	private static readonly WATCH_DEBOUNCE_MS = 500;
+ 
+-	private extensionStatuses = new Map<string, string>();
++	private extensionStatusItems = new Map<string, ExtensionStatusItem>();
+ 	private cachedBranch: string | null | undefined = undefined;
+ 	private gitPaths: GitPaths | null | undefined = undefined;
+ 	private headWatcher: FSWatcher | null = null;
+@@ -133,7 +144,12 @@ export class FooterDataProvider {
+ 
+ 	/** Extension status texts set via ctx.ui.setStatus() */
+ 	getExtensionStatuses(): ReadonlyMap<string, string> {
+-		return this.extensionStatuses;
++		return new Map(Array.from(this.extensionStatusItems, ([key, item]) => [key, item.text]));
++	}
++
++	/** Extension status texts and alignments set via ctx.ui.setStatus() */
++	getExtensionStatusItems(): ReadonlyMap<string, ExtensionStatusItem> {
++		return this.extensionStatusItems;
+ 	}
+ 
+ 	/** Subscribe to git branch changes. Returns unsubscribe function. */
+@@ -143,17 +159,20 @@ export class FooterDataProvider {
+ 	}
+ 
+ 	/** Internal: set extension status */
+-	setExtensionStatus(key: string, text: string | undefined): void {
++	setExtensionStatus(key: string, text: string | undefined, options?: ExtensionStatusOptions): void {
+ 		if (text === undefined) {
+-			this.extensionStatuses.delete(key);
+-		} else {
+-			this.extensionStatuses.set(key, text);
++			this.extensionStatusItems.delete(key);
++			return;
+ 		}
++		this.extensionStatusItems.set(key, {
++			text,
++			align: options?.align === "right" ? "right" : "left",
++		});
+ 	}
+ 
+ 	/** Internal: clear extension statuses */
+ 	clearExtensionStatuses(): void {
+-		this.extensionStatuses.clear();
++		this.extensionStatusItems.clear();
+ 	}
+ 
+ 	/** Number of unique providers with available models (for footer display) */
+@@ -384,5 +403,9 @@ export class FooterDataProvider {
+ /** Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose */
+ export type ReadonlyFooterDataProvider = Pick<
+ 	FooterDataProvider,
+-	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange"
++	| "getGitBranch"
++	| "getExtensionStatuses"
++	| "getExtensionStatusItems"
++	| "getAvailableProviderCount"
++	| "onBranchChange"
+ >;
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 3d05c2af..80812d28 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -166,7 +166,12 @@ export {
+ 	wrapRegisteredTools,
+ } from "./core/extensions/index.ts";
+ // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
+-export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
++export type {
++	ExtensionStatusAlign,
++	ExtensionStatusItem,
++	ExtensionStatusOptions,
++	ReadonlyFooterDataProvider,
++} from "./core/footer-data-provider.ts";
+ export { convertToLlm } from "./core/messages.ts";
+ export { ModelRegistry } from "./core/model-registry.ts";
+ export {
+diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/packages/coding-agent/src/modes/interactive/components/footer.ts
+index 26c9f279..6d65ad00 100644
+--- a/packages/coding-agent/src/modes/interactive/components/footer.ts
++++ b/packages/coding-agent/src/modes/interactive/components/footer.ts
+@@ -18,6 +18,42 @@ function sanitizeStatusText(text: string): string {
+ 		.trim();
+ }
+ 
++function joinLeftRight(left: string, right: string, width: number, ellipsis: string): string {
++	let leftText = left;
++	let leftWidth = visibleWidth(leftText);
++	if (leftWidth > width) {
++		leftText = truncateToWidth(leftText, width, ellipsis);
++		leftWidth = visibleWidth(leftText);
++	}
++
++	if (!right) {
++		return leftText;
++	}
++
++	if (!leftText) {
++		const rightWidth = visibleWidth(right);
++		if (rightWidth <= width) {
++			return `${" ".repeat(width - rightWidth)}${right}`;
++		}
++		return truncateToWidth(right, width, ellipsis);
++	}
++
++	const minPadding = 2;
++	const rightWidth = visibleWidth(right);
++	if (leftWidth + minPadding + rightWidth <= width) {
++		return `${leftText}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
++	}
++
++	const availableForRight = width - leftWidth - minPadding;
++	if (availableForRight > 0) {
++		const truncatedRight = truncateToWidth(right, availableForRight, "");
++		const truncatedRightWidth = visibleWidth(truncatedRight);
++		return `${leftText}${" ".repeat(Math.max(0, width - leftWidth - truncatedRightWidth))}${truncatedRight}`;
++	}
++
++	return leftText;
++}
++
+ /**
+  * Format token counts for compact footer display.
+  */
+@@ -230,14 +266,23 @@ export class FooterComponent implements Component {
+ 		const lines = [pwdLine, dimStatsLeft + dimRemainder];
+ 
+ 		// Add extension statuses on a single line, sorted by key alphabetically
+-		const extensionStatuses = this.footerData.getExtensionStatuses();
+-		if (extensionStatuses.size > 0) {
+-			const sortedStatuses = Array.from(extensionStatuses.entries())
+-				.sort(([a], [b]) => a.localeCompare(b))
+-				.map(([, text]) => sanitizeStatusText(text));
+-			const statusLine = sortedStatuses.join(" ");
+-			// Truncate to terminal width with dim ellipsis for consistency with footer style
+-			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
++		const statusItems = Array.from(this.footerData.getExtensionStatusItems().entries())
++			.sort(([a], [b]) => a.localeCompare(b))
++			.map(([, item]) => ({
++				text: sanitizeStatusText(item.text),
++				align: item.align === "right" ? "right" : "left",
++			}))
++			.filter((item) => item.text.length > 0);
++		if (statusItems.length > 0) {
++			const leftStatus = statusItems
++				.filter((item) => item.align !== "right")
++				.map((item) => item.text)
++				.join(" ");
++			const rightStatus = statusItems
++				.filter((item) => item.align === "right")
++				.map((item) => item.text)
++				.join(" ");
++			lines.push(joinLeftRight(leftStatus, rightStatus, width, theme.fg("dim", "...")));
+ 		}
+ 
+ 		return lines;
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 96e34452..019e6da2 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -78,7 +78,11 @@ import type {
+ 	ProjectTrustContext,
+ 	WorkingIndicatorOptions,
+ } from "../../core/extensions/index.ts";
+-import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
++import {
++	FooterDataProvider,
++	type ExtensionStatusOptions,
++	type ReadonlyFooterDataProvider,
++} from "../../core/footer-data-provider.ts";
+ import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
+ import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
+ import { createCompactionSummaryMessage } from "../../core/messages.ts";
+@@ -2014,8 +2018,12 @@ export class InteractiveMode {
+ 	/**
+ 	 * Set extension status text in the footer.
+ 	 */
+-	private setExtensionStatus(key: string, text: string | undefined): void {
+-		this.footerDataProvider.setExtensionStatus(key, text);
++	private setExtensionStatus(
++		key: string,
++		text: string | undefined,
++		options?: ExtensionStatusOptions,
++	): void {
++		this.footerDataProvider.setExtensionStatus(key, text, options);
+ 		this.ui.requestRender();
+ 	}
+ 
+@@ -2324,7 +2332,7 @@ export class InteractiveMode {
+ 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
+ 			notify: (message, type) => this.showExtensionNotify(message, type),
+ 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
+-			setStatus: (key, text) => this.setExtensionStatus(key, text),
++			setStatus: (key, text, options) => this.setExtensionStatus(key, text, options),
+ 			setWorkingMessage: (message) => {
+ 				this.workingMessage = message;
+ 				if (this.activeStatusIndicator?.kind === "working") {
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index 1b5d8a65..ecb808b6 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -14,6 +14,7 @@
+ import * as crypto from "node:crypto";
+ import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+ import type {
++	ExtensionStatusOptions,
+ 	ExtensionUIContext,
+ 	ExtensionUIDialogOptions,
+ 	ExtensionWidgetOptions,
+@@ -165,7 +166,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 			return () => {};
+ 		},
+ 
+-		setStatus(key: string, text: string | undefined): void {
++		setStatus(key: string, text: string | undefined, options?: ExtensionStatusOptions): void {
+ 			// Fire and forget - no response needed
+ 			output({
+ 				type: "extension_ui_request",
+@@ -173,6 +174,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 				method: "setStatus",
+ 				statusKey: key,
+ 				statusText: text,
++				statusAlign: options?.align,
+ 			} as RpcExtensionUIRequest);
+ 		},
+ 
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-types.ts b/packages/coding-agent/src/modes/rpc/rpc-types.ts
+index 5957eebc..62deb598 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-types.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-types.ts
+@@ -260,6 +260,7 @@ export type RpcExtensionUIRequest =
+ 			method: "setStatus";
+ 			statusKey: string;
+ 			statusText: string | undefined;
++			statusAlign?: "left" | "right";
+ 	  }
+ 	| {
+ 			type: "extension_ui_request";
+diff --git a/packages/coding-agent/test/footer-data-provider.test.ts b/packages/coding-agent/test/footer-data-provider.test.ts
+index 4ad9a23a..eba5b34e 100644
+--- a/packages/coding-agent/test/footer-data-provider.test.ts
++++ b/packages/coding-agent/test/footer-data-provider.test.ts
+@@ -262,4 +262,22 @@ describe("FooterDataProvider reftable branch detection", () => {
+ 			vi.useRealTimers();
+ 		}
+ 	});
++
++	it("stores extension status alignment and clears it with undefined text", () => {
++		const provider = new FooterDataProvider(tempDir);
++		try {
++			provider.setExtensionStatus("usage", "[weekly] 84%", { align: "right" });
++			expect(provider.getExtensionStatuses().get("usage")).toBe("[weekly] 84%");
++			expect(provider.getExtensionStatusItems().get("usage")).toEqual({
++				text: "[weekly] 84%",
++				align: "right",
++			});
++
++			provider.setExtensionStatus("usage", undefined);
++			expect(provider.getExtensionStatuses().has("usage")).toBe(false);
++			expect(provider.getExtensionStatusItems().has("usage")).toBe(false);
++		} finally {
++			provider.dispose();
++		}
++	});
+ });
+diff --git a/packages/coding-agent/test/footer-width.test.ts b/packages/coding-agent/test/footer-width.test.ts
+index 03db5b67..45501d8d 100644
+--- a/packages/coding-agent/test/footer-width.test.ts
++++ b/packages/coding-agent/test/footer-width.test.ts
+@@ -1,7 +1,10 @@
+ import { visibleWidth } from "@earendil-works/pi-tui";
+ import { beforeAll, describe, expect, it } from "vitest";
+ import type { AgentSession } from "../src/core/agent-session.ts";
+-import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
++import type {
++	ExtensionStatusItem,
++	ReadonlyFooterDataProvider,
++} from "../src/core/footer-data-provider.ts";
+ import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
+ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+ import { stripAnsi } from "../src/utils/ansi.ts";
+@@ -87,10 +90,21 @@ function createSession(options: {
+ 	return session as unknown as AgentSession;
+ }
+ 
+-function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
++function createFooterData(
++	providerCount: number,
++	statuses: ReadonlyMap<string, { text: string; align?: "left" | "right" }> = new Map(),
++): ReadonlyFooterDataProvider {
++	const textStatuses = new Map(Array.from(statuses, ([key, status]) => [key, status.text]));
++	const statusItems = new Map<string, ExtensionStatusItem>(
++		Array.from(statuses, ([key, status]) => [
++			key,
++			{ text: status.text, align: status.align === "right" ? "right" : "left" },
++		]),
++	);
+ 	const provider = {
+ 		getGitBranch: () => "main",
+-		getExtensionStatuses: () => new Map<string, string>(),
++		getExtensionStatuses: () => textStatuses,
++		getExtensionStatusItems: () => statusItems,
+ 		getAvailableProviderCount: () => providerCount,
+ 		onBranchChange: (callback: () => void) => {
+ 			void callback;
+@@ -249,4 +263,52 @@ describe("FooterComponent width handling", () => {
+ 		expect(stats).toContain("$1.234");
+ 		expect(stats).not.toContain("(sub)");
+ 	});
++
++	it("right-aligns extension statuses that request right alignment", () => {
++		const width = 80;
++		const status = "[weekly] 84% in 4d 7h";
++		const footer = new FooterComponent(
++			createSession({ sessionName: "" }),
++			createFooterData(1, new Map([["pi-provider-usage", { text: status, align: "right" }]])),
++		);
++
++		const statusLine = stripAnsi(footer.render(width)[2] ?? "");
++		expect(statusLine.endsWith(status)).toBe(true);
++		expect(statusLine.startsWith(" ")).toBe(true);
++		expect(visibleWidth(statusLine)).toBe(width);
++	});
++
++	it("keeps default extension statuses left-aligned", () => {
++		const width = 80;
++		const status = "plan 1/3";
++		const footer = new FooterComponent(
++			createSession({ sessionName: "" }),
++			createFooterData(1, new Map([["plan-mode", { text: status }]])),
++		);
++
++		const statusLine = stripAnsi(footer.render(width)[2] ?? "");
++		expect(statusLine.startsWith(status)).toBe(true);
++		expect(statusLine.endsWith(status)).toBe(true);
++	});
++
++	it("places left and right extension statuses on the same line", () => {
++		const width = 80;
++		const left = "plan 1/3";
++		const right = "[weekly] 84% in 4d 7h";
++		const footer = new FooterComponent(
++			createSession({ sessionName: "" }),
++			createFooterData(
++				1,
++				new Map([
++					["plan-mode", { text: left }],
++					["pi-provider-usage", { text: right, align: "right" }],
++				]),
++			),
++		);
++
++		const statusLine = stripAnsi(footer.render(width)[2] ?? "");
++		expect(statusLine.startsWith(left)).toBe(true);
++		expect(statusLine.endsWith(right)).toBe(true);
++		expect(visibleWidth(statusLine)).toBe(width);
++	});
+ });
