@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Removed built-in provider usage statusline. Use a user-installed provider usage extension instead.
+
 ## 0.1.1
 
 - Added native ACP mode for bb and other ACP clients, including sessions, model/thinking selection, cancellation, and tool permission requests.

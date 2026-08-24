@@ -65,15 +65,10 @@ describe("staged Bangboo package", () => {
     expect(changelog).not.toMatch(/\bPi\b|pi\.dev/u);
   });
 
-  test("includes built-in provider usage tracking", async () => {
-    const source = await readFile(new URL("src/core/provider-usage.ts", packageRoot), "utf8");
-
-    expect(source).toContain('"openai-codex"');
-    expect(source).toContain('"zai"');
-    expect(source).toContain('"zai-coding-cn"');
-    expect(source).toContain('windowLabel: "weekly"');
-    expect(source).toContain('"https://chatgpt.com/backend-api/wham/usage"');
-    expect(source).toContain("parseCodexUsage");
+  test("does not ship built-in provider usage tracking", async () => {
+    await expect(readFile(new URL("src/core/provider-usage.ts", packageRoot), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("does not offer upstream telemetry controls", async () => {
