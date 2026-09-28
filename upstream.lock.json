@@ -1,17 +1,17 @@
 {
   "repository": "https://github.com/earendil-works/pi.git",
-  "tag": "v0.84.1",
-  "commit": "53fa77ccd8a279eb87e92294ef3687b03ff80112",
+  "tag": "v0.87.1",
+  "commit": "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
   "codingAgent": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "0.84.1",
+    "version": "0.87.1",
     "path": "packages/coding-agent"
   },
   "runtimePackages": {
-    "@earendil-works/pi-agent-core": "0.84.1",
-    "@earendil-works/pi-ai": "0.84.1",
-    "@earendil-works/pi-client": "0.84.1",
-    "@earendil-works/pi-protocol": "0.84.1",
-    "@earendil-works/pi-tui": "0.84.1"
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-client": "0.87.1",
+    "@earendil-works/pi-protocol": "0.87.1",
+    "@earendil-works/pi-tui": "0.87.1"
   }
 }

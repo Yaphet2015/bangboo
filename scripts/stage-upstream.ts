@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, copyFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,8 +50,23 @@ async function copyOwnedFile(name: string): Promise<void> {
   }
 }
 
+// The pi-subagents plugin derives its host peer-alias set (for example the
+// chord gate) from the facade's version, so the staged facade must mirror the
+// locked runtime version exactly instead of the placeholder patch 0006 ships.
+async function stampPiCompatRuntimeVersion(version: string): Promise<void> {
+  const compatManifestPath = join(packageDir, "pi-compat", "package.json");
+  const manifest = JSON.parse(await readFile(compatManifestPath, "utf8")) as {
+    version?: string;
+  };
+  manifest.version = version;
+  await writeFile(compatManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   if (runtimeDependenciesBuilt) return;
+  // Mirror the upstream root "build" order so every workspace package that
+  // coding-agent links against (directly or transitively) has fresh dist types.
+  await run("npm", ["run", "build"], join(stageDir, "packages", "chord"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "tui"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "telemetry"));
   const aiPackageDir = join(stageDir, "packages", "ai");
@@ -62,9 +77,12 @@ async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   });
   await run("npm", ["run", "check:model-data"], aiPackageDir);
   await run("npm", ["run", "build:offline"], aiPackageDir);
+  await run("npm", ["run", "build"], join(stageDir, "packages", "durable"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "agent"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "session-backends", "sqlite-node"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "protocol"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "client"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "server"));
   runtimeDependenciesBuilt = true;
 }
 
@@ -138,7 +156,7 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
       testArguments.push("--exclude", "test/suite/regressions/5303-bash-output-truncation.test.ts");
     }
     if (process.platform === "win32") {
-      // These pristine v0.84.1 tests encode POSIX permissions, signals, paths,
+      // These pristine v0.87.1 tests encode POSIX permissions, signals, paths,
       // or glob semantics and fail consistently on GitHub's Windows runner.
       // Linux/macOS execute them; Windows still runs every other upstream file.
       // Serial execution avoids overlapping watcher fixture teardown.
@@ -167,6 +185,7 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
     await run("git", ["apply", "--check", path], stageDir);
     await run("git", ["apply", path], stageDir);
   }
+  await stampPiCompatRuntimeVersion(lock.codingAgent.version);
 
   await Promise.all([
     copyOwnedFile("README.md"),
@@ -176,7 +195,16 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
   ]);
 
   if (installDependencies) {
-    await run("npm", ["install", "--ignore-scripts", "--no-package-lock", "@agentclientprotocol/sdk@1.3.0"], packageDir);
+    // The post-patch workspace graph renames coding-agent to "bangboo", so
+    // sibling workspaces (for example pi-evals) resolve @earendil-works/
+    // pi-coding-agent from the registry. Upstream's .npmrc sets
+    // min-release-age=2, which would reject a runtime published less than two
+    // days ago; this single install opts out of that supply-chain gate.
+    await run(
+      "npm",
+      ["install", "--ignore-scripts", "--no-package-lock", "--min-release-age=0", "@agentclientprotocol/sdk@1.3.0"],
+      packageDir,
+    );
   }
 
   const bangbooManifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8")) as {
@@ -194,6 +222,15 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
     bangbooManifest.bangboo.upstreamCommit !== lock.commit
   ) {
     throw new Error("Staged Bangboo metadata does not match upstream.lock.json");
+  }
+  const piCompatManifest = JSON.parse(
+    await readFile(join(packageDir, "pi-compat", "package.json"), "utf8"),
+  ) as { name?: string; version?: string };
+  if (
+    piCompatManifest.name !== lock.codingAgent.package ||
+    piCompatManifest.version !== lock.codingAgent.version
+  ) {
+    throw new Error("Staged pi-compat facade does not mirror upstream.lock.json");
   }
 }
 

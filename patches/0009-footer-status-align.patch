@@ -1,20 +1,8 @@
-diff --git a/packages/coding-agent/docs/extensions.md b/packages/coding-agent/docs/extensions.md
-index 00e92a1d..4d1ea5e2 100644
---- a/packages/coding-agent/docs/extensions.md
-+++ b/packages/coding-agent/docs/extensions.md
-@@ -2554,6 +2554,7 @@ See [examples/extensions/timed-confirm.ts](../examples/extensions/timed-confirm.
- ```typescript
- // Status in footer (persistent until cleared)
- ctx.ui.setStatus("my-ext", "Processing...");
-+ctx.ui.setStatus("my-ext", "72% weekly", { align: "right" });
- ctx.ui.setStatus("my-ext", undefined);  // Clear
- 
- // Working loader (shown during streaming)
-diff --git a/packages/coding-agent/docs/rpc.md b/packages/coding-agent/docs/rpc.md
-index 499ca673..0bf574c4 100644
---- a/packages/coding-agent/docs/rpc.md
-+++ b/packages/coding-agent/docs/rpc.md
-@@ -1260,11 +1260,12 @@ Set or clear a status entry in the footer/status bar. Fire-and-forget.
+diff --git a/packages/coding-agent/docs/rpc-extension-ui.md b/packages/coding-agent/docs/rpc-extension-ui.md
+index bd489450..018bcd01 100644
+--- a/packages/coding-agent/docs/rpc-extension-ui.md
++++ b/packages/coding-agent/docs/rpc-extension-ui.md
+@@ -120,11 +120,12 @@ Set or clear a status entry in the footer/status bar. Fire-and-forget.
    "id": "uuid-6",
    "method": "setStatus",
    "statusKey": "my-ext",
@@ -27,28 +15,8 @@ index 499ca673..0bf574c4 100644
 -Send `statusText: undefined` (or omit it) to clear the status entry for that key.
 +Send `statusText: undefined` (or omit it) to clear the status entry for that key. `statusAlign` is optional and may be `"left"` or `"right"`. It defaults to `"left"`.
  
- #### setWidget
+ ### setWidget
  
-diff --git a/packages/coding-agent/docs/tui.md b/packages/coding-agent/docs/tui.md
-index d9f78929..d7d0c2ed 100644
---- a/packages/coding-agent/docs/tui.md
-+++ b/packages/coding-agent/docs/tui.md
-@@ -752,6 +752,7 @@ Show status in the footer that persists across renders. Good for mode indicators
- ```typescript
- // Set status (shown in footer)
- ctx.ui.setStatus("my-ext", ctx.ui.theme.fg("accent", "● active"));
-+ctx.ui.setStatus("quota", "[weekly] 84% in 4d 7h", { align: "right" });
- 
- // Clear status
- ctx.ui.setStatus("my-ext", undefined);
-@@ -829,6 +830,7 @@ ctx.ui.setFooter((tui, theme, footerData) => ({
-   render(width: number): string[] {
-     // footerData.getGitBranch(): string | null
-     // footerData.getExtensionStatuses(): ReadonlyMap<string, string>
-+    // footerData.getExtensionStatusItems(): ReadonlyMap<string, { text: string; align: "left" | "right" }>
-     return [`${ctx.model?.id} (${footerData.getGitBranch() || "no git"})`];
-   },
-   dispose: footerData.onBranchChange(() => tui.requestRender()), // reactive
 diff --git a/packages/coding-agent/examples/extensions/custom-footer.ts b/packages/coding-agent/examples/extensions/custom-footer.ts
 index 15e41e06..f58acac8 100644
 --- a/packages/coding-agent/examples/extensions/custom-footer.ts
@@ -62,10 +30,10 @@ index 15e41e06..f58acac8 100644
   * Token stats come from ctx.sessionManager/ctx.model (already accessible).
   */
 diff --git a/packages/coding-agent/src/core/extensions/index.ts b/packages/coding-agent/src/core/extensions/index.ts
-index f8841aa8..85839654 100644
+index ad028762..64c42fb3 100644
 --- a/packages/coding-agent/src/core/extensions/index.ts
 +++ b/packages/coding-agent/src/core/extensions/index.ts
-@@ -75,6 +75,9 @@ export type {
+@@ -88,6 +88,9 @@ export type {
  	// Runtime
  	ExtensionRuntime,
  	ExtensionShortcut,
@@ -76,10 +44,10 @@ index f8841aa8..85839654 100644
  	ExtensionUIDialogOptions,
  	ExtensionWidgetOptions,
 diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
-index a87322ce..04cbd30c 100644
+index 41bc4e67..bc997e73 100644
 --- a/packages/coding-agent/src/core/extensions/types.ts
 +++ b/packages/coding-agent/src/core/extensions/types.ts
-@@ -50,7 +50,9 @@ import type { BashResult } from "../bash-executor.ts";
+@@ -52,7 +52,9 @@ import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from
  import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
  import type { EventBus } from "../event-bus.ts";
  import type { ExecOptions, ExecResult } from "../exec.ts";
@@ -90,7 +58,7 @@ index a87322ce..04cbd30c 100644
  import type { KeybindingsManager } from "../keybindings.ts";
  import type { CustomMessage } from "../messages.ts";
  import type { ModelRegistry } from "../model-registry.ts";
-@@ -145,7 +147,7 @@ export interface ExtensionUIContext {
+@@ -151,7 +153,7 @@ export interface ExtensionUIContext {
  	onTerminalInput(handler: TerminalInputHandler): () => void;
  
  	/** Set status text in the footer/status bar. Pass undefined to clear. */
@@ -100,7 +68,7 @@ index a87322ce..04cbd30c 100644
  	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
  	setWorkingMessage(message?: string): void;
 diff --git a/packages/coding-agent/src/core/footer-data-provider.ts b/packages/coding-agent/src/core/footer-data-provider.ts
-index edee25ca..e726a180 100644
+index 3119d63d..d28dc6cd 100644
 --- a/packages/coding-agent/src/core/footer-data-provider.ts
 +++ b/packages/coding-agent/src/core/footer-data-provider.ts
 @@ -92,6 +92,17 @@ function shouldPollGitHead(repoDir: string): boolean {
@@ -120,7 +88,7 @@ index edee25ca..e726a180 100644
 +
  /**
   * Provides git branch and extension statuses - data not otherwise accessible to extensions.
-  * Token stats, model info available via ctx.sessionManager and ctx.model.
+  * Context usage on ctx.getContextUsage(), token stats on ctx.sessionManager.getEntries(), model info on ctx.model.
 @@ -100,7 +111,7 @@ export class FooterDataProvider {
  	private cwd: string;
  	private static readonly WATCH_DEBOUNCE_MS = 500;
@@ -182,10 +150,10 @@ index edee25ca..e726a180 100644
 +	| "onBranchChange"
  >;
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 3d05c2af..80812d28 100644
+index 8746a894..e6ad2a91 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -166,7 +166,12 @@ export {
+@@ -202,7 +202,12 @@ export {
  	wrapRegisteredTools,
  } from "./core/extensions/index.ts";
  // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
@@ -200,7 +168,7 @@ index 3d05c2af..80812d28 100644
  export { ModelRegistry } from "./core/model-registry.ts";
  export {
 diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/packages/coding-agent/src/modes/interactive/components/footer.ts
-index 26c9f279..6d65ad00 100644
+index e69d5fd0..e9fdbcac 100644
 --- a/packages/coding-agent/src/modes/interactive/components/footer.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/footer.ts
 @@ -18,6 +18,42 @@ function sanitizeStatusText(text: string): string {
@@ -246,7 +214,7 @@ index 26c9f279..6d65ad00 100644
  /**
   * Format token counts for compact footer display.
   */
-@@ -230,14 +266,23 @@ export class FooterComponent implements Component {
+@@ -232,14 +268,23 @@ export class FooterComponent implements Component {
  		const lines = [pwdLine, dimStatsLeft + dimRemainder];
  
  		// Add extension statuses on a single line, sorted by key alphabetically
@@ -279,11 +247,11 @@ index 26c9f279..6d65ad00 100644
  
  		return lines;
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 96e34452..019e6da2 100644
+index 2a920077..2a815712 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -78,7 +78,11 @@ import type {
- 	ProjectTrustContext,
+@@ -89,7 +89,11 @@ import type {
+ 	UserBashEventResult,
  	WorkingIndicatorOptions,
  } from "../../core/extensions/index.ts";
 -import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
@@ -294,8 +262,8 @@ index 96e34452..019e6da2 100644
 +} from "../../core/footer-data-provider.ts";
  import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
  import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
- import { createCompactionSummaryMessage } from "../../core/messages.ts";
-@@ -2014,8 +2018,12 @@ export class InteractiveMode {
+ import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
+@@ -2176,8 +2180,12 @@ export class InteractiveMode {
  	/**
  	 * Set extension status text in the footer.
  	 */
@@ -310,7 +278,7 @@ index 96e34452..019e6da2 100644
  		this.ui.requestRender();
  	}
  
-@@ -2324,7 +2332,7 @@ export class InteractiveMode {
+@@ -2516,7 +2524,7 @@ export class InteractiveMode {
  			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
  			notify: (message, type) => this.showExtensionNotify(message, type),
  			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
@@ -320,7 +288,7 @@ index 96e34452..019e6da2 100644
  				this.workingMessage = message;
  				if (this.activeStatusIndicator?.kind === "working") {
 diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
-index 1b5d8a65..ecb808b6 100644
+index f4857ffb..9a262619 100644
 --- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
 +++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
 @@ -14,6 +14,7 @@
@@ -349,10 +317,10 @@ index 1b5d8a65..ecb808b6 100644
  		},
  
 diff --git a/packages/coding-agent/src/modes/rpc/rpc-types.ts b/packages/coding-agent/src/modes/rpc/rpc-types.ts
-index 5957eebc..62deb598 100644
+index 1cbd49a8..427b03ff 100644
 --- a/packages/coding-agent/src/modes/rpc/rpc-types.ts
 +++ b/packages/coding-agent/src/modes/rpc/rpc-types.ts
-@@ -260,6 +260,7 @@ export type RpcExtensionUIRequest =
+@@ -268,6 +268,7 @@ export type RpcExtensionUIRequest =
  			method: "setStatus";
  			statusKey: string;
  			statusText: string | undefined;
@@ -361,10 +329,10 @@ index 5957eebc..62deb598 100644
  	| {
  			type: "extension_ui_request";
 diff --git a/packages/coding-agent/test/footer-data-provider.test.ts b/packages/coding-agent/test/footer-data-provider.test.ts
-index 4ad9a23a..eba5b34e 100644
+index 4fead821..06a317a8 100644
 --- a/packages/coding-agent/test/footer-data-provider.test.ts
 +++ b/packages/coding-agent/test/footer-data-provider.test.ts
-@@ -262,4 +262,22 @@ describe("FooterDataProvider reftable branch detection", () => {
+@@ -275,4 +275,22 @@ describe("FooterDataProvider reftable branch detection", () => {
  			vi.useRealTimers();
  		}
  	});

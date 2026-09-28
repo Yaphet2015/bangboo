@@ -1,17 +1,17 @@
 diff --git a/packages/coding-agent/src/config.ts b/packages/coding-agent/src/config.ts
-index 2b382ac7..896d1dca 100644
+index add1bcb0..586f2267 100644
 --- a/packages/coding-agent/src/config.ts
 +++ b/packages/coding-agent/src/config.ts
-@@ -333,7 +333,7 @@ export function getSelfUpdateUnavailableInstruction(
+@@ -338,7 +338,7 @@ export function getSelfUpdateUnavailableInstruction(
  	const method = detectInstallMethod();
  	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
  	if (method === "bun-binary") {
--		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
+-		return `Download from: https://github.com/earendil-works/pi/releases/latest`;
 +		return "Install the latest Bangboo package from npm: npm install --global bangboo@latest";
  	}
  	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
  	if (command) {
-@@ -515,10 +515,10 @@ export function getShareViewerUrl(gistId: string): string | undefined {
+@@ -528,10 +528,10 @@ export function getShareViewerUrl(gistId: string): string | undefined {
  }
  
  // =============================================================================
@@ -38,23 +38,23 @@ index c1d678a0..be9be864 100644
  {{CSS}}
    </style>
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index fb12ad9f..2e9b32bf 100644
+index a17246f8..7966f28a 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -76,7 +76,7 @@ import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli
- import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
- import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
+@@ -891,7 +891,7 @@ export async function main(args: string[], options?: MainOptions) {
  
--const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "pi -ne".';
-+const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${APP_NAME} -ne".`;
- 
- /**
-  * Read all content from piped stdin.
+ 	const { initialMessage, initialImages } = await prepareInitialMessage(parsed, stdinContent);
+ 	time("prepareInitialMessage");
+-	// pi reads user-authored themes, so it opts into full validation before any theme loads.
++	// Bangboo reads user-authored themes, so it opts into full validation before any theme loads.
+ 	setThemeJsonValidator(validateThemeJson);
+ 	initTheme(settingsManager.getTheme(), appMode === "interactive");
+ 	time("initTheme");
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 2174997a..96e34452 100644
+index 8cc6c9ea..2a920077 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -118,7 +118,6 @@ import { CustomEntryComponent } from "./components/custom-entry.ts";
+@@ -136,7 +136,6 @@ import { CustomEntryComponent } from "./components/custom-entry.ts";
  import { CustomMessageComponent } from "./components/custom-message.ts";
  import { DaxnutsComponent } from "./components/daxnuts.ts";
  import { DynamicBorder } from "./components/dynamic-border.ts";
@@ -62,7 +62,7 @@ index 2174997a..96e34452 100644
  import { ExtensionEditorComponent } from "./components/extension-editor.ts";
  import { ExtensionInputComponent } from "./components/extension-input.ts";
  import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-@@ -1033,7 +1032,7 @@ export class InteractiveMode {
+@@ -1102,7 +1101,7 @@ export class InteractiveMode {
  			})
  			.finally(() => {
  				// On Windows, npm can overwrite the shared console title while checking
@@ -71,7 +71,16 @@ index 2174997a..96e34452 100644
  				if (process.platform === "win32" && this.isInitialized) {
  					this.updateTerminalTitle();
  				}
-@@ -2963,11 +2962,6 @@ export class InteractiveMode {
+@@ -2066,7 +2065,7 @@ export class InteractiveMode {
+ 	}
+ 
+ 	private crashReportInstructions(): string {
+-		const resume = this.session.sessionFile ? `run \`${APP_NAME} -r\` to resume the session, then` : "start pi and";
++		const resume = this.session.sessionFile ? `run \`${APP_NAME} -r\` to resume the session, then` : `start ${APP_NAME} and`;
+ 		return `To report this crash: ${resume} run /bug. The crash details are attached automatically.`;
+ 	}
+ 
+@@ -3182,11 +3181,6 @@ export class InteractiveMode {
  				this.editor.setText("");
  				return;
  			}
@@ -83,7 +92,7 @@ index 2174997a..96e34452 100644
  			if (text === "/resume") {
  				this.showSessionSelector();
  				this.editor.setText("");
-@@ -3696,7 +3690,7 @@ export class InteractiveMode {
+@@ -4059,7 +4053,7 @@ export class InteractiveMode {
  			new Text(
  				theme.fg(
  					"warning",
@@ -92,25 +101,7 @@ index 2174997a..96e34452 100644
  				),
  				1,
  				0,
-@@ -3824,7 +3818,7 @@ export class InteractiveMode {
- 		try {
- 			this.ui.stop();
- 		} catch {}
--		console.error("pi exiting due to uncaughtException:");
-+		console.error("Bangboo exiting due to uncaughtException:");
- 		console.error(error);
- 		process.exit(1);
- 	}
-@@ -5469,7 +5463,7 @@ export class InteractiveMode {
- 			providerOption.name,
- 			`${providerOption.name} setup`,
- 		);
--		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside pi.`, [], true);
-+		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside Bangboo.`, [], true);
- 
- 		this.editorContainer.clear();
- 		this.editorContainer.addChild(dialog);
-@@ -6238,12 +6232,6 @@ export class InteractiveMode {
+@@ -6679,12 +6673,6 @@ export class InteractiveMode {
  		this.ui.requestRender();
  	}
  
@@ -123,3 +114,39 @@ index 2174997a..96e34452 100644
  	private handleDaxnuts(): void {
  		this.chatContainer.addChild(new Spacer(1));
  		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
+diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
+index 79a832f6..e372d0b5 100644
+--- a/packages/coding-agent/src/package-manager-cli.ts
++++ b/packages/coding-agent/src/package-manager-cli.ts
+@@ -58,7 +58,7 @@ function getActiveManagedInstallRoot(): string | undefined {
+ 	const managedRoot = resolve(configuredRoot);
+ 	const releasesDir = canonicalizePath(join(managedRoot, "releases"));
+ 	// The launcher environment is inherited by child processes. Do not classify a
+-	// source checkout or another Pi installation launched from managed Pi as managed.
++	// source checkout or another installation launched from a managed install as managed.
+ 	if (getCwdRelativePath(canonicalizePath(getPackageDir()), releasesDir) === undefined) return undefined;
+ 
+ 	const markerPath = join(managedRoot, MANAGED_INSTALL_MARKER);
+@@ -115,11 +115,11 @@ function verifyManagedRelease(releaseDir: string, expectedVersion: string): void
+ 	});
+ 	if (result.error || result.status !== 0) {
+ 		const reason = result.error?.message || result.stderr.trim() || `exit code ${result.status ?? "unknown"}`;
+-		throw new Error(`Could not verify managed Pi ${expectedVersion}: ${reason}`);
++		throw new Error(`Could not verify managed install ${expectedVersion}: ${reason}`);
+ 	}
+ 	const installedVersion = result.stdout.trim();
+ 	if (installedVersion !== expectedVersion) {
+-		throw new Error(`Managed Pi smoke test returned version ${installedVersion}; expected ${expectedVersion}.`);
++		throw new Error(`Managed install smoke test returned version ${installedVersion}; expected ${expectedVersion}.`);
+ 	}
+ }
+ 
+@@ -178,7 +178,7 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
+ 		releaseLock = await lockfile.lock(join(managedRoot, "update"), { realpath: false });
+ 	} catch (error: unknown) {
+ 		if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
+-			throw new Error("Another managed Pi update is already running.");
++			throw new Error("Another managed install update is already running.");
+ 		}
+ 		throw error;
+ 	}

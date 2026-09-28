@@ -67,17 +67,17 @@ describe("packed Bangboo CLI", () => {
     expect(manifest.pi).toEqual({ extensions: [], skills: [], prompts: [], themes: [] });
     expect(manifest.dependencies["@earendil-works/pi-coding-agent"]).toBeUndefined();
     expect(manifest.dependencies).toMatchObject({
-      "@earendil-works/pi-agent-core": "0.84.1",
-      "@earendil-works/pi-ai": "0.84.1",
-      "@earendil-works/pi-client": "0.84.1",
-      "@earendil-works/pi-protocol": "0.84.1",
-      "@earendil-works/pi-tui": "0.84.1",
+      "@agentclientprotocol/sdk": "1.3.0",
+      "@earendil-works/chord": "0.87.1",
+      "@earendil-works/pi-agent-core": "0.87.1",
+      "@earendil-works/pi-ai": "0.87.1",
+      "@earendil-works/pi-tui": "0.87.1",
     });
 
     const { stdout } = await execFileAsync(process.execPath, [join(installedPackage, "dist", "bangboo.js"), "--version"], {
       env: { ...process.env, BANGBOO_OFFLINE: "1" },
       timeout: 30_000,
     });
-    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.84.1, upstream v0.84.1)");
+    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.87.1, upstream v0.87.1)");
   });
 });

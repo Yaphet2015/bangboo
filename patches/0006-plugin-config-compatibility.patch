@@ -1,15 +1,27 @@
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
-index 2a3fe31d..09011799 100644
+index 46efc489..be77128c 100644
 --- a/packages/coding-agent/package.json
 +++ b/packages/coding-agent/package.json
-@@ -39,6 +39,7 @@
- 	},
- 	"files": [
- 		"dist",
+@@ -44,6 +44,7 @@
+ 		"!dist/client",
+ 		"!dist/experimental",
+ 		"!dist/cli/experimental",
 +		"pi-compat",
  		"docs",
  		"examples",
  		"containerization.md",
+diff --git a/packages/coding-agent/pi-compat/entry/index.js b/packages/coding-agent/pi-compat/entry/index.js
+new file mode 100644
+index 00000000..2f794135
+--- /dev/null
++++ b/packages/coding-agent/pi-compat/entry/index.js
+@@ -0,0 +1,6 @@
++// Compatibility entry for the @earendil-works/pi-coding-agent alias. The real
++// host API lives in ../../../dist/index.js; re-exporting it keeps module
++// identity intact while placing this entry one level below pi-compat's
++// manifest so extensions that sniff `dirname(resolved)/../package.json` see
++// the mirrored runtime version instead of Bangboo's own package version.
++export * from "../../../dist/index.js";
 diff --git a/packages/coding-agent/pi-compat/package.json b/packages/coding-agent/pi-compat/package.json
 new file mode 100644
 index 00000000..98f16447
@@ -62,19 +74,36 @@ index 1ceab76b..7d5874fb 100644
 +});
 +
  await import("./cli.ts");
+diff --git a/packages/coding-agent/src/core/extensions/loader.ts b/packages/coding-agent/src/core/extensions/loader.ts
+index ab7ec239..c0bdfc65 100644
+--- a/packages/coding-agent/src/core/extensions/loader.ts
++++ b/packages/coding-agent/src/core/extensions/loader.ts
+@@ -66,7 +66,11 @@ function getAliases(): Record<string, string> {
+ 	if (_aliases) return _aliases;
+ 
+ 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
+-	const packageIndex = path.resolve(__dirname, "../..", "index.js");
++	// Extensions resolve @earendil-works/pi-coding-agent to this entry so that
++	// `dirname(resolved)/../package.json` lands on the pi-compat manifest,
++	// which mirrors the runtime version (the host package carries Bangboo's
++	// own version instead).
++	const packageIndex = path.resolve(__dirname, "../../..", "pi-compat/entry/index.js");
+ 
+ 	const typeboxEntry = require.resolve("typebox");
+ 	const typeboxCompileEntry = require.resolve("typebox/compile");
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index c8abb20e..e50c26b8 100644
+index e372d0b5..9fda8a7b 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
-@@ -25,6 +25,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
- import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
- import { spawnProcess } from "./utils/child-process.ts";
+@@ -38,6 +38,7 @@ import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/chi
+ import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
+ import { getPiUserAgent } from "./utils/pi-user-agent.ts";
  import { formatVersionCheckError, getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
 +import { scanPackageForHardcodedPi } from "./utils/plugin-compatibility-scan.ts";
  import {
  	cleanupWindowsSelfUpdateQuarantine,
  	quarantineWindowsNativeDependencies,
-@@ -76,6 +77,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
+@@ -262,6 +263,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
  	}
  }
  
@@ -139,7 +168,7 @@ index c8abb20e..e50c26b8 100644
  function getPackageCommandUsage(command: PackageCommand): string {
  	switch (command) {
  		case "install":
-@@ -768,6 +827,7 @@ export async function handlePackageCommand(
+@@ -954,6 +1013,7 @@ export async function handlePackageCommand(
  			case "install":
  				await packageManager.installAndPersist(source!, { local: options.local });
  				console.log(chalk.green(`Installed ${source}`));
@@ -359,10 +388,10 @@ index 00000000..e9dcc64d
 +});
 diff --git a/packages/coding-agent/test/pi-compat-facade.test.ts b/packages/coding-agent/test/pi-compat-facade.test.ts
 new file mode 100644
-index 00000000..28e6c4b7
+index 00000000..037209e6
 --- /dev/null
 +++ b/packages/coding-agent/test/pi-compat-facade.test.ts
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,31 @@
 +import { readFile } from "node:fs/promises";
 +import { join } from "node:path";
 +import { fileURLToPath } from "node:url";
@@ -379,6 +408,19 @@ index 00000000..28e6c4b7
 +		expect((manifest.piConfig as { configDir: string }).configDir).toBe(".bangboo");
 +		expect((manifest.bin as { pi: string }).pi).toBe("../dist/bangboo.js");
 +		expect(manifest.main).toBe("../dist/index.js");
++	});
++
++	test("mirrors the locked runtime version so host peer-alias resolution stays correct", async () => {
++		const host = JSON.parse(
++			await readFile(join(packageRoot, "package.json"), "utf8"),
++		) as { bangboo?: { runtimeVersion?: string } };
++		const facade = JSON.parse(
++			await readFile(join(packageRoot, "pi-compat", "package.json"), "utf8"),
++		) as { version?: string };
++		// Stage stamping rewrites the placeholder; a stale mirror would make
++		// pi-subagents apply the wrong peer-alias set (chord gate).
++		expect(facade.version).toBe(host.bangboo?.runtimeVersion);
++		expect(facade.version).not.toBe("0.0.0-compat");
 +	});
 +});
 diff --git a/packages/coding-agent/test/plugin-compatibility-scan.test.ts b/packages/coding-agent/test/plugin-compatibility-scan.test.ts

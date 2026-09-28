@@ -1,16 +1,16 @@
 diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent/src/cli/startup-ui.ts
-index 37d6882e..2e66564f 100644
+index 8dbda3e5..acb0786c 100644
 --- a/packages/coding-agent/src/cli/startup-ui.ts
 +++ b/packages/coding-agent/src/cli/startup-ui.ts
-@@ -1,7 +1,6 @@
- import { ProcessTerminal, setKeybindings, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
+@@ -7,7 +7,6 @@ import {
+ } from "@earendil-works/pi-tui";
  import { existsSync } from "fs";
  import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir, getSettingsPath, PACKAGE_NAME } from "../config.ts";
 -import { areExperimentalFeaturesEnabled } from "../core/experimental.ts";
  import { KeybindingsManager } from "../core/keybindings.ts";
  import { DefaultPackageManager, type ResolvedResource } from "../core/package-manager.ts";
  import { SettingsManager } from "../core/settings-manager.ts";
-@@ -23,9 +22,9 @@ import {
+@@ -29,9 +28,9 @@ import {
  	type Theme,
  } from "../modes/interactive/theme/theme.ts";
  
@@ -23,7 +23,7 @@ index 37d6882e..2e66564f 100644
  
  interface DistributionMetadata {
  	packageName: string;
-@@ -33,11 +32,11 @@ interface DistributionMetadata {
+@@ -39,11 +38,11 @@ interface DistributionMetadata {
  	configDirName: string;
  }
  
@@ -39,7 +39,7 @@ index 37d6882e..2e66564f 100644
  	);
  }
  
-@@ -107,14 +106,13 @@ async function clearStartupTui(ui: TUI): Promise<void> {
+@@ -114,14 +113,13 @@ async function clearStartupTui(ui: TUI): Promise<void> {
  
  /**
   * First-time setup runs when all of these hold:
@@ -56,7 +56,7 @@ index 37d6882e..2e66564f 100644
  			packageName: PACKAGE_NAME,
  			appName: APP_NAME,
  			configDirName: CONFIG_DIR_NAME,
-@@ -122,9 +120,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
+@@ -129,9 +127,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
  	) {
  		return false;
  	}
@@ -67,12 +67,12 @@ index 37d6882e..2e66564f 100644
  		return false;
  	}
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 2e9b32bf..afabeafc 100644
+index 7966f28a..838fb2d7 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -667,7 +667,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -665,7 +665,7 @@ export async function main(args: string[], options?: MainOptions) {
  	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
- 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
+ 	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
  
 -	// Experimental first-time setup: theme choice and analytics opt-in.
 +	// First-time setup: theme choice and an explicit privacy notice.
@@ -105,10 +105,10 @@ index 7748430d..0095bc32 100644
  				new Text(
  					theme.fg(
 diff --git a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
-index c0c49f54..d645c500 100644
+index d0145946..f334951a 100644
 --- a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
-@@ -564,13 +564,6 @@ export class SettingsSelectorComponent extends Container {
+@@ -542,13 +542,6 @@ export class SettingsSelectorComponent extends Container {
  				currentValue: config.quietStartup ? "true" : "false",
  				values: ["true", "false"],
  			},
@@ -122,7 +122,7 @@ index c0c49f54..d645c500 100644
  			{
  				id: "default-project-trust",
  				label: "Default project trust",
-@@ -819,9 +812,6 @@ export class SettingsSelectorComponent extends Container {
+@@ -893,9 +886,6 @@ export class SettingsSelectorComponent extends Container {
  					case "quiet-startup":
  						callbacks.onQuietStartupChange(newValue === "true");
  						break;

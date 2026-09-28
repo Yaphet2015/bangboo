@@ -32,11 +32,24 @@ try {
 }
 
 const allowedByFile: Record<string, RegExp[]> = {
+  "../CHANGELOG.md": [
+    // Community plugin package name, not product branding.
+    /pi-subagents/u,
+  ],
   "package-manager-cli.ts": [
     /source === "pi"/u,
     // Intentional install-time compatibility warning that must reference .pi
     // to be meaningful; it is a developer-facing notice, not product branding.
     /Compatibility notice for/u,
+    // Shared user-agent helper module name.
+    /pi-user-agent/u,
+    // Managed-install marker written by the upstream launcher; the layout is
+    // a compatibility identifier, not user-facing branding.
+    /pi-managed-install/u,
+    // Upstream managed-installer endpoint. Only reachable when a Pi launcher
+    // sets PI_MANAGED_INSTALL_ROOT/PI_INSTALLER_API_BASE; Bangboo ships no
+    // launcher, so the endpoint is dead code for Bangboo users.
+    /pi\.dev\/api\/installer/u,
   ],
   "core/session-manager.ts": [/pi-generated/u, /~\/\.pi/u, /pi session/u],
   "main.ts": [/successful `pi update`/u],

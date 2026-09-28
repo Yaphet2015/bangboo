@@ -26,12 +26,39 @@ describe("staged Bangboo package", () => {
       piConfig: { name: "bangboo", configDir: ".bangboo" },
       pi: { extensions: [], skills: [], prompts: [], themes: [] },
       bangboo: {
-        runtimeVersion: "0.84.1",
-        upstreamTag: "v0.84.1",
-        upstreamCommit: "53fa77ccd8a279eb87e92294ef3687b03ff80112",
+        runtimeVersion: "0.87.1",
+        upstreamTag: "v0.87.1",
+        upstreamCommit: "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
       },
       dependencies: { "@agentclientprotocol/sdk": "1.3.0" },
     });
+  });
+
+  test("mirrors the locked runtime version in the pi-compat facade", async () => {
+    const manifest = JSON.parse(await readFile(new URL("package.json", packageRoot), "utf8")) as {
+      bangboo?: { runtimeVersion?: string };
+    };
+    const facade = JSON.parse(
+      await readFile(new URL("pi-compat/package.json", packageRoot), "utf8"),
+    ) as { name?: string; version?: string; bin?: Record<string, string> };
+
+    expect(facade.name).toBe("@earendil-works/pi-coding-agent");
+    expect(facade.version).toBe(manifest.bangboo?.runtimeVersion);
+    expect(facade.version).not.toBe("0.0.0-compat");
+    expect(facade.bin?.pi).toBe("../dist/bangboo.js");
+  });
+
+  test("routes extension version probes through the pi-compat facade", async () => {
+    // Extensions like pi-web-access sniff the runtime version via
+    // import.meta.resolve("@earendil-works/pi-coding-agent") and read the
+    // package.json one level above the resolved entry. The alias must point
+    // inside pi-compat (whose manifest mirrors the runtime version), not at
+    // the renamed host package (whose version is Bangboo's own).
+    const loader = await readFile(new URL("src/core/extensions/loader.ts", packageRoot), "utf8");
+    const entry = await readFile(new URL("pi-compat/entry/index.js", packageRoot), "utf8");
+
+    expect(loader).toContain('"../../..", "pi-compat/entry/index.js"');
+    expect(entry).toContain('"../../../dist/index.js"');
   });
 
   test("ships native ACP mode and its distribution documentation", async () => {

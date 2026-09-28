@@ -40,10 +40,10 @@ index 00000000..0695c7f1
 +	process.env[ENV_AGENT_DIR] = mkdtempSync(join(tmpdir(), "pi-test-config-"));
 +}
 diff --git a/packages/coding-agent/vitest.config.ts b/packages/coding-agent/vitest.config.ts
-index 3c49c145..cd1edbd5 100644
+index af4bee28..1acbf9fb 100644
 --- a/packages/coding-agent/vitest.config.ts
 +++ b/packages/coding-agent/vitest.config.ts
-@@ -7,6 +7,7 @@ export default mergeConfig(
+@@ -6,6 +6,7 @@ export default mergeConfig(
  	defineConfig({
  		test: {
  			globals: true,

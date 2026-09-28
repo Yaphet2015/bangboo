@@ -37,26 +37,26 @@ index 3a541f52..703c3839 100644
  
  export function mergeProviderAttributionHeaders(
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 720f9b0f..1945aec3 100644
+index 968f7414..f7e098f4 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -95,7 +95,6 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
- import type { TuiMode } from "../../core/settings-manager.ts";
+@@ -111,7 +111,6 @@ import {
+ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
  import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
  import type { SourceInfo } from "../../core/source-info.ts";
 -import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
+ import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
  import type { TruncationResult } from "../../core/tools/truncate.ts";
  import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
- import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-@@ -105,7 +104,6 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
+@@ -121,7 +120,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
+ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
  import { parseGitUrl } from "../../utils/git.ts";
- import { openBrowser } from "../../utils/open-browser.ts";
  import { getCwdRelativePath } from "../../utils/paths.ts";
 -import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
  import { killTrackedDetachedChildren } from "../../utils/shell.ts";
- import { ensureTool } from "../../utils/tools-manager.ts";
- import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-@@ -1179,41 +1177,20 @@ export class InteractiveMode {
+ import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
+ import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
+@@ -1273,41 +1271,20 @@ export class InteractiveMode {
  		const entries = parseChangelog(changelogPath);
  
  		if (!lastVersion) {
@@ -99,7 +99,7 @@ index 720f9b0f..1945aec3 100644
  	private getMarkdownThemeWithSettings(): MarkdownTheme {
  		return {
  			...getMarkdownTheme(),
-@@ -4107,11 +4084,6 @@ export class InteractiveMode {
+@@ -4475,11 +4452,6 @@ export class InteractiveMode {
  	showNewVersionNotification(release: LatestPiRelease): void {
  		const action = theme.fg("accent", `${APP_NAME} update`);
  		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
@@ -111,7 +111,7 @@ index 720f9b0f..1945aec3 100644
  		const note = release.note?.trim();
  
  		this.chatContainer.addChild(new Spacer(1));
-@@ -4128,7 +4100,6 @@ export class InteractiveMode {
+@@ -4496,7 +4468,6 @@ export class InteractiveMode {
  			);
  			this.chatContainer.addChild(new Spacer(1));
  		}
@@ -119,29 +119,33 @@ index 720f9b0f..1945aec3 100644
  		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
  		this.ui.requestRender();
  	}
-@@ -5853,6 +5824,11 @@ export class InteractiveMode {
- 	}
+diff --git a/packages/coding-agent/src/modes/interactive/session-share.ts b/packages/coding-agent/src/modes/interactive/session-share.ts
+index 784a2814..9e49398d 100644
+--- a/packages/coding-agent/src/modes/interactive/session-share.ts
++++ b/packages/coding-agent/src/modes/interactive/session-share.ts
+@@ -55,6 +55,11 @@ export function exportSessionForShare(filePath: string, session: AgentSession):
  
- 	private async handleShareCommand(): Promise<void> {
-+		if (!process.env.BANGBOO_SHARE_VIEWER_URL && !process.env.PI_SHARE_VIEWER_URL) {
-+			this.showError("Sharing is disabled. Set BANGBOO_SHARE_VIEWER_URL to enable /share.");
+ /** Share the current session through Radius, falling back to a private gist. */
+ export async function shareSession(context: SessionShareContext): Promise<void> {
++	if (!process.env.BANGBOO_SHARE_VIEWER_URL && !process.env.PI_SHARE_VIEWER_URL) {
++		context.showError("Sharing is disabled. Set BANGBOO_SHARE_VIEWER_URL to enable /share.");
++		return;
++	}
++
+ 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-share-"));
+ 	const jsonlFile = path.join(tempDir, "session.jsonl");
+ 	const htmlFile = path.join(tempDir, "session.html");
+@@ -200,6 +205,10 @@ async function shareViaGist(tmpFile: string, context: SessionShareContext): Prom
+ 		}
+ 
+ 		const previewUrl = getShareViewerUrl(gistId);
++		if (!previewUrl) {
++			context.showError("Sharing is disabled. Set BANGBOO_SHARE_VIEWER_URL to enable /share.");
 +			return;
 +		}
-+
- 		// Check if gh is available and logged in
- 		try {
- 			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-@@ -5937,6 +5913,10 @@ export class InteractiveMode {
- 
- 			// Create the preview URL
- 			const previewUrl = getShareViewerUrl(gistId);
-+			if (!previewUrl) {
-+				this.showError("Sharing is disabled. Set BANGBOO_SHARE_VIEWER_URL to enable /share.");
-+				return;
-+			}
- 			this.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
- 		} catch (error: unknown) {
- 			if (!loader.signal.aborted) {
+ 		context.showStatus(`Share URL: ${hyperlink(previewUrl, previewUrl)}\nGist: ${hyperlink(gistUrl, gistUrl)}`);
+ 	} catch (error: unknown) {
+ 		if (!loader.signal.aborted) {
 diff --git a/packages/coding-agent/src/utils/pi-user-agent.ts b/packages/coding-agent/src/utils/pi-user-agent.ts
 index b1f0a726..10718b63 100644
 --- a/packages/coding-agent/src/utils/pi-user-agent.ts
