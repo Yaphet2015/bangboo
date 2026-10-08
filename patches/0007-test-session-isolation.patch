@@ -1,11 +1,10 @@
 diff --git a/packages/coding-agent/test/config-dir-test-isolation.test.ts b/packages/coding-agent/test/config-dir-test-isolation.test.ts
 new file mode 100644
-index 00000000..27315bf7
 --- /dev/null
 +++ b/packages/coding-agent/test/config-dir-test-isolation.test.ts
-@@ -0,0 +1,16 @@
-+import { homedir } from "node:os";
-+import { join } from "node:path";
+@@ -0,0 +1,24 @@
++import { homedir, tmpdir } from "node:os";
++import { dirname, join } from "node:path";
 +import { describe, expect, test } from "vitest";
 +import { CONFIG_DIR_NAME, getAgentDir } from "../src/config.ts";
 +
@@ -19,13 +18,20 @@ index 00000000..27315bf7
 +		const realHomeAgentDir = join(homedir(), CONFIG_DIR_NAME, "agent");
 +		expect(agentDir).not.toBe(realHomeAgentDir);
 +	});
++
++	test("home-relative discovery is redirected away from the real home", () => {
++		// setup-isolate-config-dir.ts points HOME at a throwaway temp dir so
++		// ~/.agents/skills and any other home-relative scan cannot leak real
++		// user resources into resource-resolution assertions.
++		if (process.env.PI_TEST_REAL_HOME) return; // explicit opt-out keeps the real home
++		expect(dirname(process.env.HOME ?? homedir())).toBe(tmpdir());
++	});
 +});
 diff --git a/packages/coding-agent/test/setup-isolate-config-dir.ts b/packages/coding-agent/test/setup-isolate-config-dir.ts
 new file mode 100644
-index 00000000..0695c7f1
 --- /dev/null
 +++ b/packages/coding-agent/test/setup-isolate-config-dir.ts
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,21 @@
 +import { mkdtempSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
@@ -38,6 +44,14 @@ index 00000000..0695c7f1
 +// Honors an externally supplied override so individual tests can opt out.
 +if (!process.env[ENV_AGENT_DIR]) {
 +	process.env[ENV_AGENT_DIR] = mkdtempSync(join(tmpdir(), "pi-test-config-"));
++}
++
++// Resource discovery also reads $HOME directly (for example ~/.agents/skills
++// in the package manager), so a developer machine with a populated home leaks
++// real skills into config-selector tests and shifts their assertions. Point
++// HOME at a throwaway temp dir too. Opt out with PI_TEST_REAL_HOME=1.
++if (!process.env.PI_TEST_REAL_HOME) {
++	process.env.HOME = mkdtempSync(join(tmpdir(), "pi-test-home-"));
 +}
 diff --git a/packages/coding-agent/vitest.config.ts b/packages/coding-agent/vitest.config.ts
 index af4bee28..1acbf9fb 100644

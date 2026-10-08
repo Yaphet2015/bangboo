@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
-index a3587980..76c030d0 100644
+index 38d268a9f..252f1d4cc 100644
 --- a/packages/coding-agent/src/cli/args.ts
 +++ b/packages/coding-agent/src/cli/args.ts
-@@ -269,7 +269,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+@@ -281,7 +281,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
  					})
  					.join("\n")}\n`
  			: "";
@@ -11,7 +11,7 @@ index a3587980..76c030d0 100644
  
  ${chalk.bold("Usage:")}
    ${APP_NAME} [options] [--] [@files...] [messages...]
-@@ -278,7 +278,7 @@ ${chalk.bold("Commands:")}
+@@ -290,7 +290,7 @@ ${chalk.bold("Commands:")}
    ${APP_NAME} install <source> [-l]     Install extension source and add to settings
    ${APP_NAME} remove <source> [-l]      Remove extension source from settings
    ${APP_NAME} uninstall <source> [-l]   Alias for remove
@@ -20,8 +20,8 @@ index a3587980..76c030d0 100644
    ${APP_NAME} list                      List installed extensions from settings
    ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
    ${APP_NAME} auth <command>            Print credentials or check provider readiness
-@@ -325,7 +325,7 @@ ${chalk.bold("Options:")}
-   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
+@@ -340,7 +340,7 @@ ${chalk.bold("Options:")}
+   --tui-mode <mode>              TUI mode: fullscreen (default) or regular
    --approve, -a                  Trust project-local files for this run
    --no-approve, -na              Ignore project-local files for this run
 -  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
@@ -29,7 +29,7 @@ index a3587980..76c030d0 100644
    --                             End option parsing; treat remaining arguments as messages/files
    --help, -h                     Show this help
    --version, -v                  Show version number
-@@ -440,10 +440,9 @@ ${chalk.bold("Environment Variables:")}
+@@ -461,10 +461,9 @@ ${chalk.bold("Environment Variables:")}
    AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
    ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
    ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
@@ -44,7 +44,7 @@ index a3587980..76c030d0 100644
  ${chalk.bold("Built-in Tool Names:")}
    read       - Read file contents
 diff --git a/packages/coding-agent/src/core/system-prompt.ts b/packages/coding-agent/src/core/system-prompt.ts
-index b69488e0..f84803e6 100644
+index 49bcb58ee..2847b18fd 100644
 --- a/packages/coding-agent/src/core/system-prompt.ts
 +++ b/packages/coding-agent/src/core/system-prompt.ts
 @@ -3,7 +3,7 @@
@@ -56,38 +56,38 @@ index b69488e0..f84803e6 100644
  import { formatSkillsForPrompt, type Skill } from "./skills.ts";
  
  export interface BuildSystemPromptOptions {
-@@ -144,20 +144,20 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
+@@ -153,20 +153,20 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
  		promptSections.preamble = customPrompt;
  	} else {
  		promptSections.preamble =
 -			"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
 +			`You are an expert coding assistant operating inside ${APP_NAME}, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
- 		const visibleTools = selectedTools.filter((name) => !!toolSnippets[name]);
+ 		const visibleTools = declaredTools.filter((name) => !!toolSnippets[name]);
  		const tools =
  			visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets[name]}`).join("\n") : "(none)";
  		promptSections.tools = `${tools}\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
- 		promptSections.rules = buildRules(selectedTools, toolGuidelines, promptGuidelines);
+ 		promptSections.rules = buildRules(declaredTools, toolGuidelines, promptGuidelines);
 -		promptSections.docs = `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
-+		promptSections.docs = `Bangboo documentation (read only when the user asks about Bangboo itself, its SDK, extensions, themes, skills, or TUI):
++		promptSections.docs = `Bangboo documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
  - Main documentation: ${getReadmePath()}
  - Additional docs: ${getDocsPath()}
  - Examples: ${getExamplesPath()} (extensions, custom tools, SDK)
 -- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
--- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)
+-- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
 -- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
 -- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
 +- When reading Bangboo docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
-+- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), compatible packages (docs/packages.md), environment variables (docs/environment-variables.md)
++- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), compatible packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
 +- When working on Bangboo topics, read the docs and examples, and follow .md cross-references before implementing
 +- Always read Bangboo .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
  	}
  
  	if (appendSystemPrompt) promptSections.addendum = appendSystemPrompt;
 diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
-index de5f76e0..7748430d 100644
+index f115d2b84..8ebeca70a 100644
 --- a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
-@@ -71,7 +71,7 @@ export class FirstTimeSetupComponent extends Container {
+@@ -74,7 +74,7 @@ export class FirstTimeSetupComponent extends Container {
  				new Text(
  					theme.fg(
  						"muted",
@@ -97,7 +97,7 @@ index de5f76e0..7748430d 100644
  					1,
  					0,
 diff --git a/packages/coding-agent/src/modes/interactive/external-editor.ts b/packages/coding-agent/src/modes/interactive/external-editor.ts
-index d672d4e0..85b6594f 100644
+index d672d4e08..85b6594fb 100644
 --- a/packages/coding-agent/src/modes/interactive/external-editor.ts
 +++ b/packages/coding-agent/src/modes/interactive/external-editor.ts
 @@ -17,7 +17,7 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
@@ -110,19 +110,19 @@ index d672d4e0..85b6594f 100644
  		// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
  		// Node/libuv's console input read active after the parent pauses stdin, racing
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index f7e098f4..8cc6c9ea 100644
+index d3453131f..29ce1b257 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -992,7 +992,7 @@ export class InteractiveMode {
- 			);
- 			const onboarding = theme.fg(
- 				"dim",
--				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
-+				`Bangboo can explain its own features and look up its docs. Ask it how to use or extend Bangboo.`,
- 			);
- 			this.builtInHeader = new ExpandableText(
- 				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-@@ -1250,7 +1250,7 @@ export class InteractiveMode {
+@@ -1057,7 +1057,7 @@ export class InteractiveMode {
+ 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
+ 				);
+ 			const onboarding = () =>
+-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
++				theme.fg("dim", `Bangboo can explain its own features and look up its docs. Ask it how to use or extend Bangboo.`);
+ 			const header = new BuiltInHeader(
+ 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
+ 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
+@@ -1316,7 +1316,7 @@ export class InteractiveMode {
  		}
  
  		if (extendedKeysFormat === "xterm") {
@@ -132,10 +132,10 @@ index f7e098f4..8cc6c9ea 100644
  
  		return undefined;
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index 53239daf..79a832f6 100644
+index 45a6db707..b7843de3f 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
-@@ -269,7 +269,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
+@@ -291,7 +291,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
  		case "remove":
  			return `${APP_NAME} remove <source> [-l] [--approve|--no-approve]`;
  		case "update":
@@ -144,7 +144,7 @@ index 53239daf..79a832f6 100644
  		case "list":
  			return `${APP_NAME} list [--approve|--no-approve]`;
  	}
-@@ -337,24 +337,24 @@ Examples:
+@@ -359,24 +359,24 @@ Examples:
  			console.log(`${chalk.bold("Usage:")}
    ${getPackageCommandUsage("update")}
  

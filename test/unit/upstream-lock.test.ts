@@ -3,13 +3,13 @@ import { describe, expect, test } from "vitest";
 import { parseUpstreamLock } from "../../src/upstream-lock.js";
 
 describe("parseUpstreamLock", () => {
-  test("accepts the pinned v0.87.1 runtime", async () => {
+  test("accepts the pinned v1.1.0 runtime", async () => {
     const raw = await readFile(new URL("../../upstream.lock.json", import.meta.url), "utf8");
 
     expect(parseUpstreamLock(raw)).toMatchObject({
-      tag: "v0.87.1",
-      commit: "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
-      codingAgent: { version: "0.87.1" },
+      tag: "v1.1.0",
+      commit: "abe508e1b89912adde45528136c3221eb69acdd7",
+      codingAgent: { version: "1.1.0" },
     });
   });
 

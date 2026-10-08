@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,10 +28,16 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function run(command: string, args: string[], cwd = root, allowFailure = false): Promise<void> {
+async function run(
+  command: string,
+  args: string[],
+  cwd = root,
+  allowFailure = false,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   const resolved = command === "npm" ? resolveNpmCommand(args) : { command, args };
   await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(resolved.command, resolved.args, { cwd, stdio: "inherit", env: process.env });
+    const child = spawn(resolved.command, resolved.args, { cwd, stdio: "inherit", env });
     child.on("error", reject);
     child.on("close", (code, signal) => {
       if (code === 0 || allowFailure) {
@@ -69,6 +75,8 @@ async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   await run("npm", ["run", "build"], join(stageDir, "packages", "chord"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "tui"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "telemetry"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "codemode"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "mcp"));
   const aiPackageDir = join(stageDir, "packages", "ai");
   await hydrateModelData({
     packageName: PI_AI_PACKAGE_NAME,
@@ -78,8 +86,8 @@ async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
   await run("npm", ["run", "check:model-data"], aiPackageDir);
   await run("npm", ["run", "build:offline"], aiPackageDir);
   await run("npm", ["run", "build"], join(stageDir, "packages", "durable"));
+  await run("npm", ["run", "build"], join(stageDir, "packages", "env"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "agent"));
-  await run("npm", ["run", "build"], join(stageDir, "packages", "session-backends", "sqlite-node"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "protocol"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "client"));
   await run("npm", ["run", "build"], join(stageDir, "packages", "server"));
@@ -87,6 +95,11 @@ async function buildRuntimeDependencies(lock: UpstreamLock): Promise<void> {
 }
 
 async function runUpstreamTests(packageDir: string, testArguments: string[]): Promise<void> {
+  // The pristine suite runs before the isolation patches exist, so a developer
+  // machine with a populated home (~/.agents/skills, git config) leaks real
+  // resources into config-selector assertions that pass on CI's clean HOME.
+  // Run the suite against a throwaway HOME, matching the CI environment.
+  const isolatedHome = await mkdtemp(join(tmpdir(), "pi-upstream-test-home-"));
   const testPath = join(packageDir, "test", "tool-execution-component.test.ts");
   await withTemporaryFileContents(
     testPath,
@@ -104,7 +117,7 @@ async function runUpstreamTests(packageDir: string, testArguments: string[]): Pr
         )
         .replaceAll(pathExpression, stablePathExpression);
     },
-    () => run("npm", testArguments, packageDir),
+    () => run("npm", testArguments, packageDir, false, { ...process.env, HOME: isolatedHome }),
   );
 }
 
@@ -156,7 +169,7 @@ async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstr
       testArguments.push("--exclude", "test/suite/regressions/5303-bash-output-truncation.test.ts");
     }
     if (process.platform === "win32") {
-      // These pristine v0.87.1 tests encode POSIX permissions, signals, paths,
+      // These pristine upstream tests encode POSIX permissions, signals, paths,
       // or glob semantics and fail consistently on GitHub's Windows runner.
       // Linux/macOS execute them; Windows still runs every other upstream file.
       // Serial execution avoids overlapping watcher fixture teardown.

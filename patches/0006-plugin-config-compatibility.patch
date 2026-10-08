@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
-index 46efc489..be77128c 100644
+index 27022a6d..4eb2d431 100644
 --- a/packages/coding-agent/package.json
 +++ b/packages/coding-agent/package.json
 @@ -44,6 +44,7 @@
@@ -75,10 +75,10 @@ index 1ceab76b..7d5874fb 100644
 +
  await import("./cli.ts");
 diff --git a/packages/coding-agent/src/core/extensions/loader.ts b/packages/coding-agent/src/core/extensions/loader.ts
-index ab7ec239..c0bdfc65 100644
+index bee134d3..e8aeae3e 100644
 --- a/packages/coding-agent/src/core/extensions/loader.ts
 +++ b/packages/coding-agent/src/core/extensions/loader.ts
-@@ -66,7 +66,11 @@ function getAliases(): Record<string, string> {
+@@ -70,7 +70,11 @@ function getAliases(): Record<string, string> {
  	if (_aliases) return _aliases;
  
  	const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -92,7 +92,7 @@ index ab7ec239..c0bdfc65 100644
  	const typeboxEntry = require.resolve("typebox");
  	const typeboxCompileEntry = require.resolve("typebox/compile");
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index e372d0b5..9fda8a7b 100644
+index bb3332a4..0dbcf57b 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
 @@ -38,6 +38,7 @@ import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/chi
@@ -103,7 +103,7 @@ index e372d0b5..9fda8a7b 100644
  import {
  	cleanupWindowsSelfUpdateQuarantine,
  	quarantineWindowsNativeDependencies,
-@@ -262,6 +263,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
+@@ -284,6 +285,64 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
  	}
  }
  
@@ -168,7 +168,7 @@ index e372d0b5..9fda8a7b 100644
  function getPackageCommandUsage(command: PackageCommand): string {
  	switch (command) {
  		case "install":
-@@ -954,6 +1013,7 @@ export async function handlePackageCommand(
+@@ -980,6 +1039,7 @@ export async function handlePackageCommand(
  			case "install":
  				await packageManager.installAndPersist(source!, { local: options.local });
  				console.log(chalk.green(`Installed ${source}`));

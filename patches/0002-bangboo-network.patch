@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/provider-attribution.ts b/packages/coding-agent/src/core/provider-attribution.ts
-index 3a541f52..703c3839 100644
+index 3a541f527..703c38395 100644
 --- a/packages/coding-agent/src/core/provider-attribution.ts
 +++ b/packages/coding-agent/src/core/provider-attribution.ts
 @@ -43,21 +43,20 @@ function getDefaultAttributionHeaders(
@@ -37,10 +37,18 @@ index 3a541f52..703c3839 100644
  
  export function mergeProviderAttributionHeaders(
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 968f7414..f7e098f4 100644
+index 55ea40409..d3453131f 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -111,7 +111,6 @@ import {
+@@ -36,7 +36,6 @@ import {
+ 	Container,
+ 	fuzzyFilter,
+ 	getCapabilities,
+-	hyperlink,
+ 	Markdown,
+ 	matchesKey,
+ 	Spacer,
+@@ -116,7 +115,6 @@ import {
  import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
  import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
  import type { SourceInfo } from "../../core/source-info.ts";
@@ -48,15 +56,15 @@ index 968f7414..f7e098f4 100644
  import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
  import type { TruncationResult } from "../../core/tools/truncate.ts";
  import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
-@@ -121,7 +120,6 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
- import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
+@@ -128,7 +126,6 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
  import { parseGitUrl } from "../../utils/git.ts";
+ import { ensurePngTranscoder } from "../../utils/image-convert.ts";
  import { getCwdRelativePath } from "../../utils/paths.ts";
 -import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
  import { killTrackedDetachedChildren } from "../../utils/shell.ts";
  import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
  import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
-@@ -1273,41 +1271,20 @@ export class InteractiveMode {
+@@ -1340,41 +1337,20 @@ export class InteractiveMode {
  		const entries = parseChangelog(changelogPath);
  
  		if (!lastVersion) {
@@ -99,28 +107,35 @@ index 968f7414..f7e098f4 100644
  	private getMarkdownThemeWithSettings(): MarkdownTheme {
  		return {
  			...getMarkdownTheme(),
-@@ -4475,11 +4452,6 @@ export class InteractiveMode {
+@@ -4633,16 +4609,8 @@ export class InteractiveMode {
+ 	}
+ 
  	showNewVersionNotification(release: LatestPiRelease): void {
- 		const action = theme.fg("accent", `${APP_NAME} update`);
- 		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
+-		const updateInstruction = () =>
+-			theme.fg("muted", `New version ${release.version} is available. Run `) +
+-			theme.fg("accent", `${APP_NAME} update`);
 -		const changelogUrl = "https://pi.dev/changelog";
--		const changelogLink = getCapabilities().hyperlinks
--			? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
--			: theme.fg("accent", changelogUrl);
--		const changelogLine = theme.fg("muted", "Changelog: ") + changelogLink;
+-		const changelogLine = () => {
+-			const changelogLink = getCapabilities().hyperlinks
+-				? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
+-				: theme.fg("accent", changelogUrl);
+-			return theme.fg("muted", "Changelog: ") + changelogLink;
+-		};
++		const action = theme.fg("accent", `${APP_NAME} update`);
++		const updateInstruction = () => theme.fg("muted", `New version ${release.version} is available. Run `) + action;
  		const note = release.note?.trim();
  
  		this.chatContainer.addChild(new Spacer(1));
-@@ -4496,7 +4468,6 @@ export class InteractiveMode {
+@@ -4659,7 +4627,6 @@ export class InteractiveMode {
  			);
  			this.chatContainer.addChild(new Spacer(1));
  		}
--		this.chatContainer.addChild(new Text(changelogLine, 1, 0));
+-		this.chatContainer.addChild(new ThemedText(changelogLine, 1, 0));
  		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
  		this.ui.requestRender();
  	}
 diff --git a/packages/coding-agent/src/modes/interactive/session-share.ts b/packages/coding-agent/src/modes/interactive/session-share.ts
-index 784a2814..9e49398d 100644
+index 784a28141..9e49398dd 100644
 --- a/packages/coding-agent/src/modes/interactive/session-share.ts
 +++ b/packages/coding-agent/src/modes/interactive/session-share.ts
 @@ -55,6 +55,11 @@ export function exportSessionForShare(filePath: string, session: AgentSession):
@@ -147,7 +162,7 @@ index 784a2814..9e49398d 100644
  	} catch (error: unknown) {
  		if (!loader.signal.aborted) {
 diff --git a/packages/coding-agent/src/utils/pi-user-agent.ts b/packages/coding-agent/src/utils/pi-user-agent.ts
-index b1f0a726..10718b63 100644
+index b1f0a7260..10718b63a 100644
 --- a/packages/coding-agent/src/utils/pi-user-agent.ts
 +++ b/packages/coding-agent/src/utils/pi-user-agent.ts
 @@ -1,4 +1,4 @@
@@ -157,7 +172,7 @@ index b1f0a726..10718b63 100644
 +	return `bangboo/${version} (${process.platform}; ${runtime}; ${process.arch})`;
  }
 diff --git a/packages/coding-agent/src/utils/version-check.ts b/packages/coding-agent/src/utils/version-check.ts
-index a09a3d00..04357be1 100644
+index a09a3d000..04357be19 100644
 --- a/packages/coding-agent/src/utils/version-check.ts
 +++ b/packages/coding-agent/src/utils/version-check.ts
 @@ -2,7 +2,7 @@ import { compare, valid } from "semver";

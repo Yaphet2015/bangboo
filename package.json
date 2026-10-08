@@ -1,6 +1,6 @@
 {
   "name": "bangboo-build",
-  "version": "0.1.1",
+  "version": "1.1.0",
   "private": true,
   "description": "Build and release tooling for the Bangboo coding agent",
   "type": "module",

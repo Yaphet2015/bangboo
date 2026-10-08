@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/cli/startup-ui.ts b/packages/coding-agent/src/cli/startup-ui.ts
-index 8dbda3e5..acb0786c 100644
+index de22205a..cc1f4c59 100644
 --- a/packages/coding-agent/src/cli/startup-ui.ts
 +++ b/packages/coding-agent/src/cli/startup-ui.ts
 @@ -7,7 +7,6 @@ import {
@@ -10,9 +10,9 @@ index 8dbda3e5..acb0786c 100644
  import { KeybindingsManager } from "../core/keybindings.ts";
  import { DefaultPackageManager, type ResolvedResource } from "../core/package-manager.ts";
  import { SettingsManager } from "../core/settings-manager.ts";
-@@ -29,9 +28,9 @@ import {
- 	type Theme,
+@@ -31,9 +30,9 @@ import {
  } from "../modes/interactive/theme/theme.ts";
+ import { requestTerminalColors } from "../modes/interactive/theme/theme-controller.ts";
  
 -const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 -const OFFICIAL_APP_NAME = "pi";
@@ -23,7 +23,7 @@ index 8dbda3e5..acb0786c 100644
  
  interface DistributionMetadata {
  	packageName: string;
-@@ -39,11 +38,11 @@ interface DistributionMetadata {
+@@ -41,11 +40,11 @@ interface DistributionMetadata {
  	configDirName: string;
  }
  
@@ -39,7 +39,7 @@ index 8dbda3e5..acb0786c 100644
  	);
  }
  
-@@ -114,14 +113,13 @@ async function clearStartupTui(ui: TUI): Promise<void> {
+@@ -123,14 +122,13 @@ async function clearStartupTui(ui: TUI): Promise<void> {
  
  /**
   * First-time setup runs when all of these hold:
@@ -56,7 +56,7 @@ index 8dbda3e5..acb0786c 100644
  			packageName: PACKAGE_NAME,
  			appName: APP_NAME,
  			configDirName: CONFIG_DIR_NAME,
-@@ -129,9 +127,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
+@@ -138,9 +136,6 @@ export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()
  	) {
  		return false;
  	}
@@ -67,10 +67,10 @@ index 8dbda3e5..acb0786c 100644
  		return false;
  	}
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 7966f28a..838fb2d7 100644
+index 922e2c2d..172aec38 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -665,7 +665,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -678,7 +678,7 @@ export async function main(args: string[], options?: MainOptions) {
  	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
  	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
  
@@ -80,10 +80,10 @@ index 7966f28a..838fb2d7 100644
  	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
  		await showFirstTimeSetup(startupSettingsManager);
 diff --git a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
-index 7748430d..0095bc32 100644
+index 8ebeca70..a389fa2a 100644
 --- a/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/first-time-setup.ts
-@@ -21,10 +21,7 @@ const THEME_OPTIONS: Array<{ value: TerminalTheme; label: string }> = [
+@@ -22,10 +22,7 @@ const THEME_OPTIONS: Array<{ value: string; label: string }> = [
  	{ value: "light", label: "Light" },
  ];
  
@@ -95,7 +95,7 @@ index 7748430d..0095bc32 100644
  
  const SETUP_LOGO_LINES = ["██████", "██  ██", "████  ██", "██    ██"];
  
-@@ -66,7 +63,7 @@ export class FirstTimeSetupComponent extends Container {
+@@ -69,7 +66,7 @@ export class FirstTimeSetupComponent extends Container {
  				this.themeIndex,
  			);
  		} else {
@@ -105,12 +105,12 @@ index 7748430d..0095bc32 100644
  				new Text(
  					theme.fg(
 diff --git a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
-index d0145946..f334951a 100644
+index af42ab63..b08cca07 100644
 --- a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
-@@ -542,13 +542,6 @@ export class SettingsSelectorComponent extends Container {
- 				currentValue: config.quietStartup ? "true" : "false",
- 				values: ["true", "false"],
+@@ -558,13 +558,6 @@ export class SettingsSelectorComponent extends Container {
+ 				currentValue: String(config.quietStartup),
+ 				values: ["true", "header", "false"],
  			},
 -			{
 -				id: "install-telemetry",
@@ -122,9 +122,9 @@ index d0145946..f334951a 100644
  			{
  				id: "default-project-trust",
  				label: "Default project trust",
-@@ -893,9 +886,6 @@ export class SettingsSelectorComponent extends Container {
+@@ -923,9 +916,6 @@ export class SettingsSelectorComponent extends Container {
  					case "quiet-startup":
- 						callbacks.onQuietStartupChange(newValue === "true");
+ 						callbacks.onQuietStartupChange(newValue === "header" ? "header" : newValue === "true");
  						break;
 -					case "install-telemetry":
 -						callbacks.onEnableInstallTelemetryChange(newValue === "true");

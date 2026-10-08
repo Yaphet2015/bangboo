@@ -30,24 +30,24 @@ index 15e41e06..f58acac8 100644
   * Token stats come from ctx.sessionManager/ctx.model (already accessible).
   */
 diff --git a/packages/coding-agent/src/core/extensions/index.ts b/packages/coding-agent/src/core/extensions/index.ts
-index ad028762..64c42fb3 100644
+index aebd5c60..6b0407e2 100644
 --- a/packages/coding-agent/src/core/extensions/index.ts
 +++ b/packages/coding-agent/src/core/extensions/index.ts
-@@ -88,6 +88,9 @@ export type {
+@@ -89,6 +89,9 @@ export type {
  	// Runtime
  	ExtensionRuntime,
  	ExtensionShortcut,
 +	ExtensionStatusAlign,
 +	ExtensionStatusItem,
 +	ExtensionStatusOptions,
+ 	ExtensionToolContext,
  	ExtensionUIContext,
  	ExtensionUIDialogOptions,
- 	ExtensionWidgetOptions,
 diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
-index 41bc4e67..bc997e73 100644
+index 5d65cce9..4acb0d24 100644
 --- a/packages/coding-agent/src/core/extensions/types.ts
 +++ b/packages/coding-agent/src/core/extensions/types.ts
-@@ -52,7 +52,9 @@ import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from
+@@ -61,7 +61,9 @@ import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from
  import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
  import type { EventBus } from "../event-bus.ts";
  import type { ExecOptions, ExecResult } from "../exec.ts";
@@ -56,9 +56,9 @@ index 41bc4e67..bc997e73 100644
 +
 +export type { ExtensionStatusAlign, ExtensionStatusItem, ExtensionStatusOptions } from "../footer-data-provider.ts";
  import type { KeybindingsManager } from "../keybindings.ts";
+ import type { McpServerConfig, McpServerRegistry, RegisteredMcpServer } from "../mcp-servers.ts";
  import type { CustomMessage } from "../messages.ts";
- import type { ModelRegistry } from "../model-registry.ts";
-@@ -151,7 +153,7 @@ export interface ExtensionUIContext {
+@@ -163,7 +165,7 @@ export interface ExtensionUIContext {
  	onTerminalInput(handler: TerminalInputHandler): () => void;
  
  	/** Set status text in the footer/status bar. Pass undefined to clear. */
@@ -150,28 +150,31 @@ index 3119d63d..d28dc6cd 100644
 +	| "onBranchChange"
  >;
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 8746a894..e6ad2a91 100644
+index 3a25f85c..ae8b24db 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -202,7 +202,12 @@ export {
+@@ -214,9 +214,13 @@ export {
  	wrapRegisteredTools,
  } from "./core/extensions/index.ts";
  // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 -export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
+-export type { RegisteredMcpServer } from "./core/mcp-servers.ts";
+-export { convertToLlm } from "./core/messages.ts";
 +export type {
 +	ExtensionStatusAlign,
 +	ExtensionStatusItem,
 +	ExtensionStatusOptions,
 +	ReadonlyFooterDataProvider,
 +} from "./core/footer-data-provider.ts";
- export { convertToLlm } from "./core/messages.ts";
++export type { RegisteredMcpServer } from "./core/mcp-servers.ts";export { convertToLlm } from "./core/messages.ts";
  export { ModelRegistry } from "./core/model-registry.ts";
  export {
+ 	type ModelScopeDiagnostic,
 diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/packages/coding-agent/src/modes/interactive/components/footer.ts
-index e69d5fd0..e9fdbcac 100644
+index 8bb7b353..1bd1da68 100644
 --- a/packages/coding-agent/src/modes/interactive/components/footer.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/footer.ts
-@@ -18,6 +18,42 @@ function sanitizeStatusText(text: string): string {
+@@ -19,6 +19,42 @@ function sanitizeStatusText(text: string): string {
  		.trim();
  }
  
@@ -214,7 +217,7 @@ index e69d5fd0..e9fdbcac 100644
  /**
   * Format token counts for compact footer display.
   */
-@@ -232,14 +268,23 @@ export class FooterComponent implements Component {
+@@ -287,14 +323,23 @@ export class FooterComponent implements Component {
  		const lines = [pwdLine, dimStatsLeft + dimRemainder];
  
  		// Add extension statuses on a single line, sorted by key alphabetically
@@ -247,10 +250,10 @@ index e69d5fd0..e9fdbcac 100644
  
  		return lines;
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 2a920077..2a815712 100644
+index c9f547b5..c9617a93 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -89,7 +89,11 @@ import type {
+@@ -91,7 +91,11 @@ import type {
  	UserBashEventResult,
  	WorkingIndicatorOptions,
  } from "../../core/extensions/index.ts";
@@ -262,8 +265,8 @@ index 2a920077..2a815712 100644
 +} from "../../core/footer-data-provider.ts";
  import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
  import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
- import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
-@@ -2176,8 +2180,12 @@ export class InteractiveMode {
+ import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
+@@ -2272,8 +2276,12 @@ export class InteractiveMode {
  	/**
  	 * Set extension status text in the footer.
  	 */
@@ -278,7 +281,7 @@ index 2a920077..2a815712 100644
  		this.ui.requestRender();
  	}
  
-@@ -2516,7 +2524,7 @@ export class InteractiveMode {
+@@ -2612,7 +2620,7 @@ export class InteractiveMode {
  			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
  			notify: (message, type) => this.showExtensionNotify(message, type),
  			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
@@ -288,7 +291,7 @@ index 2a920077..2a815712 100644
  				this.workingMessage = message;
  				if (this.activeStatusIndicator?.kind === "working") {
 diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
-index f4857ffb..9a262619 100644
+index 1c0995d3..d4fb2032 100644
 --- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
 +++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
 @@ -14,6 +14,7 @@
@@ -317,10 +320,10 @@ index f4857ffb..9a262619 100644
  		},
  
 diff --git a/packages/coding-agent/src/modes/rpc/rpc-types.ts b/packages/coding-agent/src/modes/rpc/rpc-types.ts
-index 1cbd49a8..427b03ff 100644
+index 7fc71516..caf58007 100644
 --- a/packages/coding-agent/src/modes/rpc/rpc-types.ts
 +++ b/packages/coding-agent/src/modes/rpc/rpc-types.ts
-@@ -268,6 +268,7 @@ export type RpcExtensionUIRequest =
+@@ -274,6 +274,7 @@ export type RpcExtensionUIRequest =
  			method: "setStatus";
  			statusKey: string;
  			statusText: string | undefined;
@@ -329,10 +332,10 @@ index 1cbd49a8..427b03ff 100644
  	| {
  			type: "extension_ui_request";
 diff --git a/packages/coding-agent/test/footer-data-provider.test.ts b/packages/coding-agent/test/footer-data-provider.test.ts
-index 4fead821..06a317a8 100644
+index ad86908f..0f0b6c39 100644
 --- a/packages/coding-agent/test/footer-data-provider.test.ts
 +++ b/packages/coding-agent/test/footer-data-provider.test.ts
-@@ -275,4 +275,22 @@ describe("FooterDataProvider reftable branch detection", () => {
+@@ -276,4 +276,22 @@ describe("FooterDataProvider reftable branch detection", () => {
  			vi.useRealTimers();
  		}
  	});
@@ -356,7 +359,7 @@ index 4fead821..06a317a8 100644
 +	});
  });
 diff --git a/packages/coding-agent/test/footer-width.test.ts b/packages/coding-agent/test/footer-width.test.ts
-index 03db5b67..45501d8d 100644
+index 12c074d0..826130a9 100644
 --- a/packages/coding-agent/test/footer-width.test.ts
 +++ b/packages/coding-agent/test/footer-width.test.ts
 @@ -1,7 +1,10 @@
@@ -371,7 +374,7 @@ index 03db5b67..45501d8d 100644
  import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
  import { initTheme } from "../src/modes/interactive/theme/theme.ts";
  import { stripAnsi } from "../src/utils/ansi.ts";
-@@ -87,10 +90,21 @@ function createSession(options: {
+@@ -92,10 +95,21 @@ function createSession(options: {
  	return session as unknown as AgentSession;
  }
  
@@ -395,7 +398,7 @@ index 03db5b67..45501d8d 100644
  		getAvailableProviderCount: () => providerCount,
  		onBranchChange: (callback: () => void) => {
  			void callback;
-@@ -249,4 +263,52 @@ describe("FooterComponent width handling", () => {
+@@ -279,4 +293,52 @@ describe("FooterComponent width handling", () => {
  		expect(stats).toContain("$1.234");
  		expect(stats).not.toContain("(sub)");
  	});

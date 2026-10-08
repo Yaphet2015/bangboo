@@ -44,7 +44,7 @@ describe("built Bangboo CLI", () => {
     const project = await mkdtemp(join(tmpdir(), "bangboo-acp-project-"));
     const result = await initializeAcpProcess(cli, stagedPackage, project, home);
 
-    expect(result.response.agentInfo).toEqual({ name: "bangboo", version: "0.1.1" });
+    expect(result.response.agentInfo).toEqual({ name: "bangboo", version: "1.1.0" });
     expect(result.response.protocolVersion).toBeTypeOf("number");
     expect(result.stdout.trim()).not.toBe("");
     expect(result.exitCode).toBe(0);
@@ -56,7 +56,7 @@ describe("built Bangboo CLI", () => {
 
     const { stdout } = await runCli(["--version"], project, home);
 
-    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.87.1, upstream v0.87.1)");
+    expect(stdout.trim()).toBe("bangboo 1.1.0 (runtime 1.1.0, upstream v1.1.0)");
   });
 
   test("enables Bangboo first-run setup without an experimental flag", async () => {
@@ -113,7 +113,7 @@ describe("built Bangboo CLI", () => {
       let calls = [];
       globalThis.fetch = async (url, options) => {
         calls.push({ url: String(url), userAgent: options?.headers?.["User-Agent"] });
-        return { ok: true, json: async () => ({ name: "bangboo", version: "0.1.1" }) };
+        return { ok: true, json: async () => ({ name: "bangboo", version: "1.1.0" }) };
       };
       process.env.PI_OFFLINE = "1";
       const offline = await getLatestPiRelease("0.1.0");
@@ -139,7 +139,7 @@ describe("built Bangboo CLI", () => {
     };
 
     expect(output.offline).toBeUndefined();
-    expect(output.online).toEqual({ packageName: "bangboo", version: "0.1.1" });
+    expect(output.online).toEqual({ packageName: "bangboo", version: "1.1.0" });
     expect(output.calls).toEqual([
       { url: "https://registry.npmjs.org/bangboo/latest", userAgent: expect.stringMatching(/^bangboo\/0\.1\.0 /u) },
     ]);

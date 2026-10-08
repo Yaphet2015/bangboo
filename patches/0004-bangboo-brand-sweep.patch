@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/config.ts b/packages/coding-agent/src/config.ts
-index add1bcb0..586f2267 100644
+index 9d325b38..25a4e84e 100644
 --- a/packages/coding-agent/src/config.ts
 +++ b/packages/coding-agent/src/config.ts
-@@ -338,7 +338,7 @@ export function getSelfUpdateUnavailableInstruction(
+@@ -342,7 +342,7 @@ export function getSelfUpdateUnavailableInstruction(
  	const method = detectInstallMethod();
  	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
  	if (method === "bun-binary") {
@@ -11,7 +11,7 @@ index add1bcb0..586f2267 100644
  	}
  	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
  	if (command) {
-@@ -528,10 +528,10 @@ export function getShareViewerUrl(gistId: string): string | undefined {
+@@ -605,10 +605,10 @@ export function getShareViewerUrl(gistId: string): string | undefined {
  }
  
  // =============================================================================
@@ -37,11 +37,24 @@ index c1d678a0..be9be864 100644
    <style>
  {{CSS}}
    </style>
+diff --git a/packages/coding-agent/src/core/system-prompt.ts b/packages/coding-agent/src/core/system-prompt.ts
+index 2847b18f..22253161 100644
+--- a/packages/coding-agent/src/core/system-prompt.ts
++++ b/packages/coding-agent/src/core/system-prompt.ts
+@@ -159,7 +159,7 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
+ 			visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets[name]}`).join("\n") : "(none)";
+ 		promptSections.tools = `${tools}\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
+ 		promptSections.rules = buildRules(declaredTools, toolGuidelines, promptGuidelines);
+-		promptSections.docs = `Bangboo documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
++		promptSections.docs = `Bangboo documentation (read only when the user asks about Bangboo itself, its SDK, extensions, themes, skills, or TUI):
+ - Main documentation: ${getReadmePath()}
+ - Additional docs: ${getDocsPath()}
+ - Examples: ${getExamplesPath()} (extensions, custom tools, SDK)
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index a17246f8..7966f28a 100644
+index 1ac2d2aa..922e2c2d 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -891,7 +891,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -909,7 +909,7 @@ export async function main(args: string[], options?: MainOptions) {
  
  	const { initialMessage, initialImages } = await prepareInitialMessage(parsed, stdinContent);
  	time("prepareInitialMessage");
@@ -51,18 +64,36 @@ index a17246f8..7966f28a 100644
  	initTheme(settingsManager.getTheme(), appMode === "interactive");
  	time("initTheme");
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 8cc6c9ea..2a920077 100644
+index 123bbe01..0ccfa0fd 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -136,7 +136,6 @@ import { CustomEntryComponent } from "./components/custom-entry.ts";
+@@ -141,7 +141,6 @@ import { CustomEditor } from "./components/custom-editor.ts";
+ import { CustomEntryComponent } from "./components/custom-entry.ts";
  import { CustomMessageComponent } from "./components/custom-message.ts";
- import { DaxnutsComponent } from "./components/daxnuts.ts";
  import { DynamicBorder } from "./components/dynamic-border.ts";
 -import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
+ import { playArmin3d, playPiLogo3d } from "./components/easter-egg-3d.lazy.ts";
  import { ExtensionEditorComponent } from "./components/extension-editor.ts";
  import { ExtensionInputComponent } from "./components/extension-input.ts";
- import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-@@ -1102,7 +1101,7 @@ export class InteractiveMode {
+@@ -365,7 +364,7 @@ type LoginProviderCompletionOption = {
+ 	subscription?: boolean;
+ };
+ 
+-const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
++const RADIUS_LOGIN_INTRO = "Radius is a service crafted by the runtime's upstream builders, Earendil Works";
+ 
+ const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
+ 
+@@ -1007,7 +1006,7 @@ export class InteractiveMode {
+ 			const showDetails = this.shouldShowStartupDetails();
+ 			// Built on demand so the header follows theme changes. The logo's first line carries the version,
+ 			// its second line the first line of key hints. Terminals that cannot render the logo get a
+-			// "Pi vX" line instead, with the key hints below it.
++			// "π vX" line instead, with the key hints below it.
+ 			const showLogo = supportsPiLogo();
+ 			const withLogo = (hints: string) => {
+ 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
+@@ -1168,7 +1167,7 @@ export class InteractiveMode {
  			})
  			.finally(() => {
  				// On Windows, npm can overwrite the shared console title while checking
@@ -71,7 +102,7 @@ index 8cc6c9ea..2a920077 100644
  				if (process.platform === "win32" && this.isInitialized) {
  					this.updateTerminalTitle();
  				}
-@@ -2066,7 +2065,7 @@ export class InteractiveMode {
+@@ -2137,7 +2136,7 @@ export class InteractiveMode {
  	}
  
  	private crashReportInstructions(): string {
@@ -80,7 +111,7 @@ index 8cc6c9ea..2a920077 100644
  		return `To report this crash: ${resume} run /bug. The crash details are attached automatically.`;
  	}
  
-@@ -3182,11 +3181,6 @@ export class InteractiveMode {
+@@ -3303,11 +3302,6 @@ export class InteractiveMode {
  				this.editor.setText("");
  				return;
  			}
@@ -92,16 +123,25 @@ index 8cc6c9ea..2a920077 100644
  			if (text === "/resume") {
  				this.showSessionSelector();
  				this.editor.setText("");
-@@ -4059,7 +4053,7 @@ export class InteractiveMode {
- 			new Text(
- 				theme.fg(
- 					"warning",
--					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
-+					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart Bangboo.`,
- 				),
+@@ -4211,7 +4205,7 @@ export class InteractiveMode {
+ 				() =>
+ 					theme.fg(
+ 						"warning",
+-						`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
++						`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart Bangboo.`,
+ 					),
  				1,
  				0,
-@@ -6679,12 +6673,6 @@ export class InteractiveMode {
+@@ -4326,7 +4320,7 @@ export class InteractiveMode {
+ 	 * paste / Kitty / modifyOtherKeys sequences.
+ 	 */
+ 	private uncaughtCrash(error: Error): never {
+-		// A dead terminal is not a pi crash. Do not try to restore it or record it.
++		// A dead terminal is not a bangboo crash. Do not try to restore it or record it.
+ 		if (isDeadTerminalError(error)) {
+ 			this.emergencyTerminalExit();
+ 		}
+@@ -6945,12 +6939,6 @@ export class InteractiveMode {
  		this.ui.requestRender();
  	}
  
@@ -111,11 +151,11 @@ index 8cc6c9ea..2a920077 100644
 -		this.ui.requestRender();
 -	}
 -
- 	private handleDaxnuts(): void {
- 		this.chatContainer.addChild(new Spacer(1));
- 		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
+ 	private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
+ 		const extensionRunner = this.session.extensionRunner;
+ 
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index 79a832f6..e372d0b5 100644
+index b7843de3..37f37297 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
 @@ -58,7 +58,7 @@ function getActiveManagedInstallRoot(): string | undefined {
@@ -141,7 +181,7 @@ index 79a832f6..e372d0b5 100644
  	}
  }
  
-@@ -178,7 +178,7 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
+@@ -198,7 +198,7 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
  		releaseLock = await lockfile.lock(join(managedRoot, "update"), { realpath: false });
  	} catch (error: unknown) {
  		if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
@@ -150,3 +190,23 @@ index 79a832f6..e372d0b5 100644
  		}
  		throw error;
  	}
+@@ -1115,19 +1115,6 @@ export async function handlePackageCommand(
+ 						return true;
+ 					}
+ 					console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
+-					// The pi.dev installer migrates global npm installs to a managed install
+-					// that pins all dependencies. It does not migrate pnpm, yarn, or bun installs.
+-					if (installMethod === "npm") {
+-						const installerCommand =
+-							process.platform === "win32"
+-								? 'powershell -c "irm https://pi.dev/install.ps1 | iex"'
+-								: "curl -fsSL https://pi.dev/install.sh | sh";
+-						console.log();
+-						console.log(chalk.yellow(`This npm installation of ${APP_NAME} does not pin its dependencies.`));
+-						console.log(chalk.yellow("Run the installer to migrate to a managed installation that does:"));
+-						console.log();
+-						console.log(`  ${chalk.bold(installerCommand)}`);
+-					}
+ 				}
+ 				return true;
+ 			}

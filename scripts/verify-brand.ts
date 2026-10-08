@@ -33,8 +33,9 @@ try {
 
 const allowedByFile: Record<string, RegExp[]> = {
   "../CHANGELOG.md": [
-    // Community plugin package name, not product branding.
+    // Community plugin package names, not product branding.
     /pi-subagents/u,
+    /pi-web-access/u,
   ],
   "package-manager-cli.ts": [
     /source === "pi"/u,
@@ -46,15 +47,32 @@ const allowedByFile: Record<string, RegExp[]> = {
     // Managed-install marker written by the upstream launcher; the layout is
     // a compatibility identifier, not user-facing branding.
     /pi-managed-install/u,
-    // Upstream managed-installer endpoint. Only reachable when a Pi launcher
-    // sets PI_MANAGED_INSTALL_ROOT/PI_INSTALLER_API_BASE; Bangboo ships no
-    // launcher, so the endpoint is dead code for Bangboo users.
+    // Upstream managed-installer API endpoint. Only reachable when a Pi
+    // launcher sets PI_MANAGED_INSTALL_ROOT/PI_INSTALLER_API_BASE; Bangboo
+    // ships no launcher, so the endpoint is dead code for Bangboo users. The
+    // user-facing install.sh/ps1 migration hint was swept in patch 0004.
     /pi\.dev\/api\/installer/u,
   ],
-  "core/session-manager.ts": [/pi-generated/u, /~\/\.pi/u, /pi session/u],
+  "config.ts": [
+    // Upstream npm age-gate rationale references pi.dev release cadence;
+    // comment-only, not user-facing branding.
+    /pi\.dev advertises/u,
+    // Codemode worker ships inside the upstream pi-codemode package.
+    /pi-codemode/u,
+    // Update-in-place detection references the upstream `pi update` command.
+    /`pi update`/u,
+  ],
+  "core/session-manager.ts": [/pi-generated/u, /~\/\.pi/u, /pi session/u, /closing pi without chatting/u],
   "main.ts": [/successful `pi update`/u],
   "modes/interactive/components/extension-editor.ts": [/pi-extension-editor/u],
-  "modes/interactive/interactive-mode.ts": [/gained a \.pi/u, /pi-clipboard/u, /\bin pi\)/u, /pi-editor/u],
+  "modes/interactive/interactive-mode.ts": [
+    /gained a \.pi/u,
+    /pi-clipboard/u,
+    /\bin pi\)/u,
+    /pi-editor/u,
+    // The bundled π wordmark renderer lives in the upstream pi-logo module.
+    /pi-logo\.ts/u,
+  ],
   "utils/version-check.ts": [/pi-user-agent/u],
 };
 const violations: BrandViolation[] = [];

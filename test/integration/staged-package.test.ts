@@ -20,15 +20,15 @@ describe("staged Bangboo package", () => {
 
     expect(manifest).toMatchObject({
       name: "bangboo",
-      version: "0.1.1",
+      version: "1.1.0",
       bin: { bangboo: "dist/bangboo.js" },
       repository: { type: "git", url: "git+https://github.com/Yaphet2015/bangboo.git" },
       piConfig: { name: "bangboo", configDir: ".bangboo" },
       pi: { extensions: [], skills: [], prompts: [], themes: [] },
       bangboo: {
-        runtimeVersion: "0.87.1",
-        upstreamTag: "v0.87.1",
-        upstreamCommit: "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
+        runtimeVersion: "1.1.0",
+        upstreamTag: "v1.1.0",
+        upstreamCommit: "abe508e1b89912adde45528136c3221eb69acdd7",
       },
       dependencies: { "@agentclientprotocol/sdk": "1.3.0" },
     });

@@ -19,7 +19,11 @@ describe("packed Bangboo CLI", () => {
   beforeAll(async () => {
     const pack = resolveNpmCommand(["run", "pack"]);
     await execFileAsync(pack.command, pack.args, { cwd: repositoryRoot, timeout: packTimeout });
-    const archives = (await readdir(join(repositoryRoot, "artifacts"))).filter((name) => name === "bangboo-0.1.1.tgz");
+    const distribution = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")) as {
+      version: string;
+    };
+    const expectedArchive = `bangboo-${distribution.version}.tgz`;
+    const archives = (await readdir(join(repositoryRoot, "artifacts"))).filter((name) => name === expectedArchive);
     expect(archives).toHaveLength(1);
     installRoot = await mkdtemp(join(tmpdir(), "bangboo-install-"));
     const install = resolveNpmCommand([
@@ -51,7 +55,7 @@ describe("packed Bangboo CLI", () => {
       home,
     );
 
-    expect(result.response.agentInfo).toEqual({ name: "bangboo", version: "0.1.1" });
+    expect(result.response.agentInfo).toEqual({ name: "bangboo", version: "1.1.0" });
     expect(result.response.protocolVersion).toBeTypeOf("number");
     expect(result.stdout.trim()).not.toBe("");
     expect(result.exitCode).toBe(0);
@@ -68,16 +72,16 @@ describe("packed Bangboo CLI", () => {
     expect(manifest.dependencies["@earendil-works/pi-coding-agent"]).toBeUndefined();
     expect(manifest.dependencies).toMatchObject({
       "@agentclientprotocol/sdk": "1.3.0",
-      "@earendil-works/chord": "0.87.1",
-      "@earendil-works/pi-agent-core": "0.87.1",
-      "@earendil-works/pi-ai": "0.87.1",
-      "@earendil-works/pi-tui": "0.87.1",
+      "@earendil-works/chord": "1.1.0",
+      "@earendil-works/pi-agent-core": "1.1.0",
+      "@earendil-works/pi-ai": "1.1.0",
+      "@earendil-works/pi-tui": "1.1.0",
     });
 
     const { stdout } = await execFileAsync(process.execPath, [join(installedPackage, "dist", "bangboo.js"), "--version"], {
       env: { ...process.env, BANGBOO_OFFLINE: "1" },
       timeout: 30_000,
     });
-    expect(stdout.trim()).toBe("bangboo 0.1.1 (runtime 0.87.1, upstream v0.87.1)");
+    expect(stdout.trim()).toBe("bangboo 1.1.0 (runtime 1.1.0, upstream v1.1.0)");
   });
 });
