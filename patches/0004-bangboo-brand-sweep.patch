@@ -24,6 +24,23 @@ index 9d325b38..25a4e84e 100644
  export function getAgentDir(): string {
  	const envDir = process.env[ENV_AGENT_DIR];
  	if (envDir) {
+diff --git a/packages/coding-agent/src/core/bug-report.ts b/packages/coding-agent/src/core/bug-report.ts
+index efdeb5e2..ea5c4df2 100644
+--- a/packages/coding-agent/src/core/bug-report.ts
++++ b/packages/coding-agent/src/core/bug-report.ts
+@@ -276,10 +276,10 @@ export function writeBugReportArchive(bundle: BugReportBundle, filePath: string)
+ }
+ 
+ export function bugReportArchiveFileName(id: string): string {
+-	return `pi-bug-report-${id}.zip`;
++	return `bangboo-bug-report-${id}.zip`;
+ }
+ 
+-const BUG_SUMMARY_SYSTEM_PROMPT = `You are helping a user file a bug report about pi, the coding agent they are talking to. You will be shown the conversation transcript. Write a report for the pi developers describing what the user was doing and what went wrong.
++const BUG_SUMMARY_SYSTEM_PROMPT = `You are helping a user file a bug report about bangboo, the coding agent they are talking to. You will be shown the conversation transcript. Write a report for the upstream maintainers describing what the user was doing and what went wrong.
+ 
+ Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the report.`;
+ 
 diff --git a/packages/coding-agent/src/core/export-html/template.html b/packages/coding-agent/src/core/export-html/template.html
 index c1d678a0..be9be864 100644
 --- a/packages/coding-agent/src/core/export-html/template.html
@@ -37,6 +54,19 @@ index c1d678a0..be9be864 100644
    <style>
  {{CSS}}
    </style>
+diff --git a/packages/coding-agent/src/core/slash-commands.ts b/packages/coding-agent/src/core/slash-commands.ts
+index 934de40a..ae7ea807 100644
+--- a/packages/coding-agent/src/core/slash-commands.ts
++++ b/packages/coding-agent/src/core/slash-commands.ts
+@@ -25,7 +25,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
+ 	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
+ 	{ name: "import", description: "Import and resume a session from a JSONL file" },
+ 	{ name: "share", description: "Share session as a secret GitHub gist" },
+-	{ name: "bug", description: "Report a bug to the Pi developers", argumentHint: "<description>" },
++	{ name: "bug", description: "Report a bug to the upstream maintainers", argumentHint: "<description>" },
+ 	{ name: "copy", description: "Copy last agent message to clipboard" },
+ 	{ name: "name", description: "Set session display name" },
+ 	{ name: "session", description: "Show session info and stats" },
 diff --git a/packages/coding-agent/src/core/system-prompt.ts b/packages/coding-agent/src/core/system-prompt.ts
 index 2847b18f..22253161 100644
 --- a/packages/coding-agent/src/core/system-prompt.ts
@@ -63,6 +93,19 @@ index 1ac2d2aa..922e2c2d 100644
  	setThemeJsonValidator(validateThemeJson);
  	initTheme(settingsManager.getTheme(), appMode === "interactive");
  	time("initTheme");
+diff --git a/packages/coding-agent/src/modes/interactive/bug-report.ts b/packages/coding-agent/src/modes/interactive/bug-report.ts
+index 51034e0e..e5dec5a7 100644
+--- a/packages/coding-agent/src/modes/interactive/bug-report.ts
++++ b/packages/coding-agent/src/modes/interactive/bug-report.ts
+@@ -42,7 +42,7 @@ interface BugReportOptions {
+ type Overlay = Container & { dispose?: () => void };
+ 
+ const DISCLAIMER =
+-	"This report goes to the Pi developers (Earendil) and is not shared publicly. It includes your pi version, operating system, the current model and provider configuration (without API keys), loaded extensions, settings, and provider error diagnostics from this session.";
++	"This report goes to the upstream runtime maintainers (Earendil) and is not shared publicly. It includes your bangboo version, operating system, the current model and provider configuration (without API keys), loaded extensions, settings, and provider error diagnostics from this session.";
+ const TRANSCRIPT_NOTE =
+ 	"The transcript contains your messages, model output, tool calls and their results, including file contents and command output read during this session.";
+ 
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 index 123bbe01..0ccfa0fd 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
@@ -154,6 +197,28 @@ index 123bbe01..0ccfa0fd 100644
  	private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
  		const extensionRunner = this.session.extensionRunner;
  
+diff --git a/packages/coding-agent/src/modes/interactive/session-share.ts b/packages/coding-agent/src/modes/interactive/session-share.ts
+index 9e49398d..d8c8bf40 100644
+--- a/packages/coding-agent/src/modes/interactive/session-share.ts
++++ b/packages/coding-agent/src/modes/interactive/session-share.ts
+@@ -60,7 +60,7 @@ export async function shareSession(context: SessionShareContext): Promise<void>
+ 		return;
+ 	}
+ 
+-	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-share-"));
++	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bangboo-share-"));
+ 	const jsonlFile = path.join(tempDir, "session.jsonl");
+ 	const htmlFile = path.join(tempDir, "session.html");
+ 
+@@ -123,7 +123,7 @@ async function tryShareViaRadius(tmpFile: string, context: SessionShareContext):
+ 		const body = fs.readFileSync(tmpFile);
+ 		const url = new URL("/v1/artifacts", DEFAULT_RADIUS_GATEWAY);
+ 		url.searchParams.set("visibility", "organization");
+-		url.searchParams.set("title", "Pi session");
++		url.searchParams.set("title", "Bangboo session");
+ 		const response = await fetch(url, {
+ 			method: "POST",
+ 			headers: {
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
 index b7843de3..37f37297 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts

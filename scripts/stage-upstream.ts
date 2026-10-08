@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,66 @@ let runtimeDependenciesBuilt = false;
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function mtime(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+// Staging resets the worktree, which also drops dist/ and node_modules/. That
+// breaks the globally linked CLI after every bare `npm run stage` (for example
+// from the staged-package integration test) until a full rebuild. Skip the
+// reset when the staged tree already mirrors the lock and no staging input
+// (lock, patches, owned docs, this script) is newer than the staged manifest.
+// `--force` restores the old always-reset behavior.
+async function stagingIsUpToDate(lock: UpstreamLock): Promise<boolean> {
+  interface StagedManifest {
+    name?: string;
+    version?: string;
+    bangboo?: { runtimeVersion?: string; upstreamCommit?: string };
+  }
+  interface CompatManifest {
+    name?: string;
+    version?: string;
+  }
+  try {
+    const staged = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8")) as StagedManifest;
+    const distribution = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version?: string };
+    const compat = JSON.parse(await readFile(join(packageDir, "pi-compat", "package.json"), "utf8")) as CompatManifest;
+    if (
+      staged.name !== "bangboo" ||
+      staged.version !== distribution.version ||
+      staged.bangboo?.runtimeVersion !== lock.codingAgent.version ||
+      staged.bangboo?.upstreamCommit !== lock.commit ||
+      compat.name !== lock.codingAgent.package ||
+      compat.version !== lock.codingAgent.version
+    ) {
+      return false;
+    }
+    if (!(await exists(join(stageDir, "node_modules", ".package-lock.json")))) return false;
+    const stagedMtime = (await mtime(join(packageDir, "package.json"))) ?? 0;
+    const inputs = [
+      join(root, "upstream.lock.json"),
+      join(root, "scripts", "stage-upstream.ts"),
+      join(root, "README.md"),
+      join(root, "LICENSE"),
+      join(root, "NOTICE"),
+      join(root, "CHANGELOG.md"),
+      ...(await readdir(patchDir))
+        .filter((name) => name.endsWith(".patch"))
+        .map((name) => join(patchDir, name)),
+    ];
+    for (const input of inputs) {
+      if (((await mtime(input)) ?? Number.POSITIVE_INFINITY) > stagedMtime) return false;
+    }
     return true;
   } catch {
     return false;
@@ -100,28 +160,36 @@ async function runUpstreamTests(packageDir: string, testArguments: string[]): Pr
   // resources into config-selector assertions that pass on CI's clean HOME.
   // Run the suite against a throwaway HOME, matching the CI environment.
   const isolatedHome = await mkdtemp(join(tmpdir(), "pi-upstream-test-home-"));
-  const testPath = join(packageDir, "test", "tool-execution-component.test.ts");
-  await withTemporaryFileContents(
-    testPath,
-    (original) => {
-      const pathExpression = 'resolve(process.cwd(), "..", "AGENTS.md")';
-      const stablePathExpression = 'resolve(tmpdir(), "pi-tool-execution-component", "AGENTS.md")';
-      const occurrences = original.split(pathExpression).length - 1;
-      if (occurrences !== 2) {
-        throw new Error(`Expected two outside-AGENTS fixture paths, found ${String(occurrences)}`);
-      }
-      return original
-        .replace(
-          'import { join, resolve } from "node:path";',
-          'import { tmpdir } from "node:os";\nimport { join, resolve } from "node:path";',
-        )
-        .replaceAll(pathExpression, stablePathExpression);
-    },
-    () => run("npm", testArguments, packageDir, false, { ...process.env, HOME: isolatedHome }),
-  );
+  try {
+    const testPath = join(packageDir, "test", "tool-execution-component.test.ts");
+    await withTemporaryFileContents(
+      testPath,
+      (original) => {
+        const pathExpression = 'resolve(process.cwd(), "..", "AGENTS.md")';
+        const stablePathExpression = 'resolve(tmpdir(), "pi-tool-execution-component", "AGENTS.md")';
+        const occurrences = original.split(pathExpression).length - 1;
+        if (occurrences !== 2) {
+          throw new Error(`Expected two outside-AGENTS fixture paths, found ${String(occurrences)}`);
+        }
+        return original
+          .replace(
+            'import { join, resolve } from "node:path";',
+            'import { tmpdir } from "node:os";\nimport { join, resolve } from "node:path";',
+          )
+          .replaceAll(pathExpression, stablePathExpression);
+      },
+      () => run("npm", testArguments, packageDir, false, { ...process.env, HOME: isolatedHome }),
+    );
+  } finally {
+    await rm(isolatedHome, { recursive: true, force: true });
+  }
 }
 
 async function stage(lock: UpstreamLock, installDependencies: boolean, testUpstream: boolean): Promise<void> {
+  if (!argumentsSet.has("--force") && (await stagingIsUpToDate(lock))) {
+    console.log(`Bangboo staging up-to-date at ${stageDir}`);
+    return;
+  }
   await mkdir(dirname(cacheDir), { recursive: true });
   if (!(await exists(join(cacheDir, ".git")))) {
     await run("git", ["clone", "--filter=blob:none", "--no-checkout", lock.repository, cacheDir]);

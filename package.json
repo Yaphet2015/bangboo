@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsx scripts/stage-upstream.ts --build",
-    "link:global": "npm run build && npm --prefix .bangboo-build/upstream/packages/coding-agent link",
+    "link:global": "npm run build && tsx scripts/link-global.ts",
     "pack": "tsx scripts/stage-upstream.ts --pack",
     "smoke:tarball": "tsx scripts/smoke-tarball.ts",
     "stage": "tsx scripts/stage-upstream.ts",

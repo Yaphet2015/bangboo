@@ -10,16 +10,20 @@ const files = [
   "cli/args.ts",
   "cli/startup-ui.ts",
   "config.ts",
+  "core/bug-report.ts",
   "core/export-html/template.html",
   "core/project-trust.ts",
   "core/provider-attribution.ts",
   "core/session-manager.ts",
+  "core/slash-commands.ts",
   "core/system-prompt.ts",
   "main.ts",
+  "modes/interactive/bug-report.ts",
   "modes/interactive/components/extension-editor.ts",
   "modes/interactive/components/first-time-setup.ts",
   "modes/interactive/components/settings-selector.ts",
   "modes/interactive/interactive-mode.ts",
+  "modes/interactive/session-share.ts",
   "package-manager-cli.ts",
   "utils/pi-user-agent.ts",
   "utils/version-check.ts",
@@ -62,6 +66,12 @@ const allowedByFile: Record<string, RegExp[]> = {
     // Update-in-place detection references the upstream `pi update` command.
     /`pi update`/u,
   ],
+  "core/bug-report.ts": [
+    // Wire-format session entry type consumed by the share viewer.
+    /pi\.bug-report/u,
+    // Shared user-agent helper module name.
+    /pi-user-agent/u,
+  ],
   "core/session-manager.ts": [/pi-generated/u, /~\/\.pi/u, /pi session/u, /closing pi without chatting/u],
   "main.ts": [/successful `pi update`/u],
   "modes/interactive/components/extension-editor.ts": [/pi-extension-editor/u],
@@ -72,6 +82,10 @@ const allowedByFile: Record<string, RegExp[]> = {
     /pi-editor/u,
     // The bundled π wordmark renderer lives in the upstream pi-logo module.
     /pi-logo\.ts/u,
+  ],
+  "modes/interactive/session-share.ts": [
+    // Trailing entry customType is part of the shared session wire format.
+    /pi\.share/u,
   ],
   "utils/version-check.ts": [/pi-user-agent/u],
 };
