@@ -23,6 +23,11 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      # Node 22 bundles npm 10, whose arborist crashes ("Cannot read properties
+      # of null (reading 'edgesOut')") on the staged ACP SDK install against the
+      # renamed v1.1.0 workspace. Run the same npm 11 as Node 24 everywhere.
+      - name: Use npm 11
+        run: npm install -g npm@11
       - name: Install upstream test tools on macOS
         if: runner.os == 'macOS'
         run: brew install ripgrep fd
