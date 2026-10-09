@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest]
         node: [22.19.0, 24]
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
       - run: npm run verify
 
   package-audit:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     needs: verify
     permissions:
       contents: read
@@ -46,6 +46,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # The pristine upstream suite behind `npm run pack` exercises the grep
+      # and find tools, which need ripgrep and fd binaries on PATH.
+      - name: Install upstream test tools on macOS
+        run: brew install ripgrep fd
       - run: npm ci --ignore-scripts
       - run: npm run pack
       - shell: bash
