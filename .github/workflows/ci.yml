@@ -28,8 +28,7 @@ jobs:
       # renamed v1.1.0 workspace. Run the same npm 11 as Node 24 everywhere.
       - name: Use npm 11
         run: npm install -g npm@11
-      - name: Install upstream test tools on macOS
-        if: runner.os == 'macOS'
+      - name: Install upstream test tools
         run: brew install ripgrep fd
       - run: npm ci --ignore-scripts
       - run: npm run verify

@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     environment: npm
     timeout-minutes: 30
     steps:
@@ -34,6 +34,10 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
+      # verify and pack run the pristine upstream suite, which needs
+      # ripgrep and fd binaries on PATH.
+      - name: Install upstream test tools
+        run: brew install ripgrep fd
       - run: npm ci --ignore-scripts
       - run: npm run verify
       - run: npm run pack
