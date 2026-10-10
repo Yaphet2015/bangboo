@@ -25,9 +25,9 @@ index 00000000..3ce182ad
 +
 +Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo.
 +
-+ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, client tool-permission requests, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
++ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
 +
-+Extensions are trusted code running with the user's permissions. ACP tool permissions do not sandbox extensions; review installed extensions before starting ACP mode.
++ACP mode runs every tool with full permission. Tool calls are never sent to the client for approval. Connect only from clients and projects that you trust.
 diff --git a/packages/coding-agent/package.json b/packages/coding-agent/package.json
 index 4eb2d431..cb2290ff 100644
 --- a/packages/coding-agent/package.json
@@ -303,104 +303,12 @@ index 00000000..430811e8
 +		}
 +	}
 +}
-diff --git a/packages/coding-agent/src/modes/acp/permission-gate.ts b/packages/coding-agent/src/modes/acp/permission-gate.ts
-new file mode 100644
-index 00000000..e3184081
---- /dev/null
-+++ b/packages/coding-agent/src/modes/acp/permission-gate.ts
-@@ -0,0 +1,86 @@
-+import * as acp from "@agentclientprotocol/sdk";
-+import type { InlineExtension, ToolCallEvent } from "../../core/extensions/types.ts";
-+
-+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
-+const TOOL_KIND: Record<string, acp.ToolKind> = {
-+	edit: "edit",
-+	write: "edit",
-+	bash: "execute",
-+};
-+
-+const OPTIONS: acp.PermissionOption[] = [
-+	{ optionId: "allow_once", name: "Allow once", kind: "allow_once" },
-+	{ optionId: "allow_session", name: "Allow for this session", kind: "allow_always" },
-+	{ optionId: "deny", name: "Deny", kind: "reject_once" },
-+];
-+
-+export interface AcpPermissionBroker {
-+	request(event: ToolCallEvent): Promise<"allow" | "deny">;
-+	cancelPending(): void;
-+}
-+
-+export function createAcpClientPermissionBroker(options: {
-+	client: acp.AgentContext;
-+	sessionId: string;
-+	sessionApprovals: Set<string>;
-+}): AcpPermissionBroker {
-+	const pending = new Set<() => void>();
-+	const clientSignal = (options.client as acp.AgentContext & { signal?: AbortSignal }).signal;
-+
-+	return {
-+		async request(event) {
-+			if (options.sessionApprovals.has(event.toolName)) return "allow";
-+			if (clientSignal?.aborted) return "deny";
-+			return new Promise<"allow" | "deny">((resolve) => {
-+				let settled = false;
-+				const settle = (decision: "allow" | "deny"): void => {
-+					if (settled) return;
-+					settled = true;
-+					pending.delete(cancel);
-+					clientSignal?.removeEventListener("abort", cancel);
-+					resolve(decision);
-+				};
-+				const cancel = (): void => settle("deny");
-+				pending.add(cancel);
-+				clientSignal?.addEventListener("abort", cancel, { once: true });
-+				void Promise.resolve().then(() => options.client.request(
-+					acp.methods.client.session.requestPermission,
-+					{
-+						sessionId: options.sessionId,
-+						toolCall: {
-+							toolCallId: event.toolCallId,
-+							title: event.toolName,
-+							kind: TOOL_KIND[event.toolName] ?? "other",
-+							rawInput: event.input,
-+						},
-+						options: OPTIONS,
-+					},
-+				)).then((response) => {
-+					if (settled) return;
-+					const outcome = response?.outcome;
-+					if (outcome?.outcome !== "selected") return settle("deny");
-+					if (outcome.optionId === "allow_session") {
-+						options.sessionApprovals.add(event.toolName);
-+						return settle("allow");
-+					}
-+					settle(outcome.optionId === "allow_once" ? "allow" : "deny");
-+				}, () => settle("deny"));
-+			});
-+		},
-+		cancelPending() {
-+			for (const cancel of [...pending]) cancel();
-+		},
-+	};
-+}
-+
-+export function createAcpPermissionExtension(broker: AcpPermissionBroker): InlineExtension {
-+	return (api) => {
-+		api.on("tool_call", async (event) => {
-+			if (READ_ONLY_TOOLS.has(event.toolName)) return undefined;
-+			const decision = await broker.request(event);
-+			return decision === "allow"
-+				? undefined
-+				: { block: true, reason: "Tool execution denied by ACP client" };
-+		});
-+	};
-+}
 diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
 new file mode 100644
 index 00000000..770af1b5
 --- /dev/null
 +++ b/packages/coding-agent/src/modes/acp/session-host.ts
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,308 @@
 +import { isAbsolute, normalize, resolve } from "node:path";
 +import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 +import type { Model } from "@earendil-works/pi-ai";
@@ -418,11 +326,6 @@ index 00000000..770af1b5
 +import { ProjectTrustStore } from "../../core/trust-manager.ts";
 +import { toBangbooPrompt } from "./content.ts";
 +import { mapAgentSessionEvent, replaySessionHistory } from "./event-mapper.ts";
-+import {
-+	createAcpClientPermissionBroker,
-+	createAcpPermissionExtension,
-+	type AcpPermissionBroker,
-+} from "./permission-gate.ts";
 +
 +export interface HostedSession {
 +	session: AgentSession;
@@ -547,15 +450,12 @@ index 00000000..770af1b5
 +}): AcpSessionHost {
 +	const dependencies = { ...defaultDependencies, ...options.dependencies };
 +	const sessions = new Map<string, HostedSession>();
-+	const permissionBrokers = new Map<string, AcpPermissionBroker>();
-+	const sessionApprovals = new Set<string>();
 +	const reservedSessionIds = new Set<string>();
 +	const activePrompts = new Map<string, Promise<acp.PromptResponse>>();
 +	const cancelledPrompts = new Set<string>();
 +	let disposed = false;
 +
-+	async function disposeHosted({ session, services }: HostedSession, broker?: AcpPermissionBroker): Promise<void> {
-+		broker?.cancelPending();
++	async function disposeHosted({ session, services }: HostedSession): Promise<void> {
 +		await session.abort();
 +		await services.settingsManager.flush();
 +		session.dispose();
@@ -583,18 +483,14 @@ index 00000000..770af1b5
 +		create: (extensionFactories: InlineExtension[]) => Promise<HostedSession>,
 +	): Promise<{ hosted: HostedSession; configOptions: acp.SessionConfigOption[] }> {
 +		let hosted: HostedSession | undefined;
-+		const broker = createAcpClientPermissionBroker({ client: options.client, sessionId, sessionApprovals });
 +		try {
-+			hosted = await create([...options.extensionFactories, createAcpPermissionExtension(broker)]);
++			hosted = await create(options.extensionFactories);
 +			sessions.set(sessionId, hosted);
-+			permissionBrokers.set(sessionId, broker);
 +			return { hosted, configOptions: await config(hosted) };
 +		} catch (error) {
-+			broker.cancelPending();
 +			if (hosted) {
 +				sessions.delete(sessionId);
-+				permissionBrokers.delete(sessionId);
-+				await disposeHosted(hosted, broker);
++				await disposeHosted(hosted);
 +			}
 +			throw error;
 +		} finally {
@@ -705,7 +601,6 @@ index 00000000..770af1b5
 +		},
 +		async cancel(params) {
 +			const hosted = getSession(params.sessionId);
-+			permissionBrokers.get(params.sessionId)?.cancelPending();
 +			const active = activePrompts.get(params.sessionId);
 +			if (!active) return;
 +			cancelledPrompts.add(params.sessionId);
@@ -716,10 +611,9 @@ index 00000000..770af1b5
 +			if (disposed) return;
 +			disposed = true;
 +			await Promise.all([...sessions.entries()].map(([sessionId, hosted]) =>
-+				disposeHosted(hosted, permissionBrokers.get(sessionId)),
++				disposeHosted(hosted),
 +			));
 +			sessions.clear();
-+			permissionBrokers.clear();
 +		},
 +	};
 +}
@@ -888,122 +782,6 @@ index 00000000..8a3ab46f
 +			{ sessionUpdate: "tool_call", toolCallId: "c1", rawInput: { path: "/x" } },
 +			{ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed" },
 +		]);
-+	});
-+});
-diff --git a/packages/coding-agent/test/acp/permission-gate.test.ts b/packages/coding-agent/test/acp/permission-gate.test.ts
-new file mode 100644
-index 00000000..522d9b4b
---- /dev/null
-+++ b/packages/coding-agent/test/acp/permission-gate.test.ts
-@@ -0,0 +1,110 @@
-+import * as acp from "@agentclientprotocol/sdk";
-+import { describe, expect, it, vi } from "vitest";
-+import type { ExtensionAPI, ToolCallEvent, ToolCallEventResult } from "../../src/core/extensions/types.ts";
-+import {
-+	createAcpClientPermissionBroker,
-+	createAcpPermissionExtension,
-+} from "../../src/modes/acp/permission-gate.ts";
-+
-+function event(toolName: string, input: Record<string, unknown> = {}): ToolCallEvent {
-+	return { type: "tool_call", toolCallId: `call-${toolName}`, toolName, input } as ToolCallEvent;
-+}
-+
-+function harness(request: ReturnType<typeof vi.fn>, signal = new AbortController().signal) {
-+	let handler!: (event: ToolCallEvent) => Promise<ToolCallEventResult | undefined>;
-+	const broker = createAcpClientPermissionBroker({
-+		client: { request, signal } as unknown as acp.AgentContext,
-+		sessionId: "session-1",
-+		sessionApprovals: new Set<string>(),
-+	});
-+	createAcpPermissionExtension(broker)({
-+		on: vi.fn((_name, next) => { handler = next; }),
-+	} as unknown as ExtensionAPI);
-+	return { broker, handler };
-+}
-+
-+describe("ACP permission gate", () => {
-+	it.each(["read", "grep", "find", "ls"])("allows read-only %s without asking", async (toolName) => {
-+		const request = vi.fn();
-+		const { handler } = harness(request);
-+		await expect(handler(event(toolName))).resolves.toBeUndefined();
-+		expect(request).not.toHaveBeenCalled();
-+	});
-+
-+	it.each([
-+		["edit", "edit"], ["write", "edit"], ["bash", "execute"], ["extension", "other"],
-+	])("requests permission for %s with ACP tool details", async (toolName, kind) => {
-+		const request = vi.fn(async () => ({ outcome: { outcome: "selected", optionId: "allow_once" } }));
-+		const { handler } = harness(request);
-+		const input = toolName === "bash" ? { command: "echo safe" } : { path: "/tmp/file" };
-+		await expect(handler(event(toolName, input))).resolves.toBeUndefined();
-+		expect(request).toHaveBeenCalledWith(acp.methods.client.session.requestPermission, {
-+			sessionId: "session-1",
-+			toolCall: { toolCallId: `call-${toolName}`, title: toolName, kind, rawInput: input },
-+			options: [
-+				{ optionId: "allow_once", name: "Allow once", kind: "allow_once" },
-+				{ optionId: "allow_session", name: "Allow for this session", kind: "allow_always" },
-+				{ optionId: "deny", name: "Deny", kind: "reject_once" },
-+			],
-+		});
-+	});
-+
-+	it("caches only allow-session by tool name", async () => {
-+		const request = vi.fn()
-+			.mockResolvedValueOnce({ outcome: { outcome: "selected", optionId: "allow_once" } })
-+			.mockResolvedValueOnce({ outcome: { outcome: "selected", optionId: "allow_session" } });
-+		const { handler } = harness(request);
-+		await handler(event("bash"));
-+		await handler(event("bash"));
-+		await handler(event("bash"));
-+		expect(request).toHaveBeenCalledTimes(2);
-+	});
-+
-+	it.each([
-+		["deny", { outcome: { outcome: "selected", optionId: "deny" } }],
-+		["cancelled", { outcome: { outcome: "cancelled" } }],
-+		["malformed", { outcome: { outcome: "selected", optionId: "unexpected" } }],
-+	])("fails closed for %s responses", async (_label, response) => {
-+		const { handler } = harness(vi.fn(async () => response));
-+		await expect(handler(event("write"))).resolves.toEqual({ block: true, reason: "Tool execution denied by ACP client" });
-+	});
-+
-+	it("fails closed when the request throws or the client disconnects", async () => {
-+		const thrown = harness(vi.fn(async () => { throw new Error("disconnected"); }));
-+		await expect(thrown.handler(event("edit"))).resolves.toMatchObject({ block: true });
-+		const controller = new AbortController();
-+		controller.abort();
-+		const disconnected = harness(vi.fn(() => new Promise(() => {})), controller.signal);
-+		await expect(disconnected.handler(event("edit"))).resolves.toMatchObject({ block: true });
-+	});
-+
-+	it("cancelling pending requests settles all gates as denied", async () => {
-+		const { broker, handler } = harness(vi.fn(() => new Promise(() => {})));
-+		const pending = [handler(event("edit")), handler(event("bash"))];
-+		broker.cancelPending();
-+		await expect(Promise.all(pending)).resolves.toEqual([
-+			{ block: true, reason: "Tool execution denied by ACP client" },
-+			{ block: true, reason: "Tool execution denied by ACP client" },
-+		]);
-+	});
-+
-+	it("does not cache a late allow-session response after cancellation", async () => {
-+		let resolveRequest!: (response: unknown) => void;
-+		const request = vi.fn()
-+			.mockImplementationOnce(() => new Promise((resolve) => { resolveRequest = resolve; }))
-+			.mockResolvedValueOnce({ outcome: { outcome: "selected", optionId: "deny" } });
-+		const { broker, handler } = harness(request);
-+		const first = handler(event("bash"));
-+
-+		await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-+		broker.cancelPending();
-+		resolveRequest({ outcome: { outcome: "selected", optionId: "allow_session" } });
-+
-+		await expect(first).resolves.toEqual({ block: true, reason: "Tool execution denied by ACP client" });
-+		await expect(handler(event("bash"))).resolves.toEqual({
-+			block: true,
-+			reason: "Tool execution denied by ACP client",
-+		});
-+		expect(request).toHaveBeenCalledTimes(2);
 +	});
 +});
 diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
@@ -1200,7 +978,7 @@ index 00000000..6d4ddad3
 +		});
 +
 +		expect(createRuntime).toHaveBeenCalledTimes(1);
-+		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(1);
++		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(0);
 +		expect(hosted).toHaveLength(1);
 +	});
 +
