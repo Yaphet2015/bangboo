@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added ACP startup session configuration: `session/new` and `session/load` consume `_meta.lody.sessionConfig` version 1 and apply the model before the thinking level, keeping setModel's clamp for unsupported efforts. Invalid structures return `invalidParams`; unknown models and unsupported thinking levels are ignored, and loading without the metadata preserves the saved configuration.
 - Upgraded the pinned upstream runtime to 1.1.0 (commit abe508e1) and aligned the Bangboo version with it.
 - Swept the remaining legacy brand strings: the /bug command and report copy now name the upstream maintainers instead of the upstream name, exported bug-report archives and share gists use Bangboo names, and the share temp prefix is bangboo-branded. The four affected files joined the brand audit with allowlists for the two share-viewer wire-format identifiers.
 - Removed the post-update hint that told npm installs to run the upstream installer script; the hint would have replaced Bangboo with the upstream CLI.

@@ -1,0 +1,443 @@
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -1,14 +1,16 @@
+ import { isAbsolute, normalize, resolve } from "node:path";
++import * as acp from "@agentclientprotocol/sdk";
+ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+ import type { Model } from "@earendil-works/pi-ai";
+-import * as acp from "@agentclientprotocol/sdk";
++import { Type } from "typebox";
++import { Check } from "typebox/value";
+ import { getAgentDir } from "../../config.ts";
++import type { AgentSession } from "../../core/agent-session.ts";
+ import {
++	type AgentSessionServices,
+ 	createAgentSessionFromServices,
+ 	createAgentSessionServices,
+-	type AgentSessionServices,
+ } from "../../core/agent-session-services.ts";
+-import type { AgentSession } from "../../core/agent-session.ts";
+ import type { InlineExtension } from "../../core/extensions/types.ts";
+ import { SessionManager } from "../../core/session-manager.ts";
+ import { SettingsManager } from "../../core/settings-manager.ts";
+@@ -39,6 +41,37 @@
+ 
+ function modelValue(model: Model<any>): string {
+ 	return `${model.provider}/${model.id}`;
++}
++
++const startupConfigSchema = Type.Object({
++	version: Type.Literal(1),
++	modelId: Type.Optional(Type.String({ minLength: 1 })),
++	configOptionValues: Type.Record(Type.String(), Type.Union([Type.String(), Type.Boolean()])),
++});
++
++interface StartupSessionConfig {
++	model?: string;
++	thinkingLevel?: string;
++}
++
++function readStartupConfig(meta: unknown): StartupSessionConfig | undefined {
++	if (typeof meta !== "object" || meta === null) return undefined;
++	const lody = (meta as Record<string, unknown>).lody;
++	if (typeof lody !== "object" || lody === null) return undefined;
++	const raw = (lody as Record<string, unknown>).sessionConfig;
++	if (raw === undefined) return undefined;
++	if (!Check(startupConfigSchema, raw)) {
++		throw acp.RequestError.invalidParams(undefined, "Invalid sessionConfig version 1");
++	}
++	const model = raw.modelId ?? raw.configOptionValues.model;
++	const thinkingLevel = raw.configOptionValues.thought_level;
++	if (model !== undefined && (typeof model !== "string" || !model.trim())) {
++		throw acp.RequestError.invalidParams(undefined, "Invalid sessionConfig model");
++	}
++	if (thinkingLevel !== undefined && (typeof thinkingLevel !== "string" || !thinkingLevel.trim())) {
++		throw acp.RequestError.invalidParams(undefined, "Invalid sessionConfig thinking level");
++	}
++	return { model, thinkingLevel };
+ }
+ 
+ function settledStopReason(session: AgentSession): acp.StopReason | undefined {
+@@ -170,10 +203,23 @@
+ 	async function installSession(
+ 		sessionId: string,
+ 		create: (extensionFactories: InlineExtension[]) => Promise<HostedSession>,
++		startupConfig?: StartupSessionConfig,
+ 	): Promise<{ hosted: HostedSession; configOptions: acp.SessionConfigOption[] }> {
+ 		let hosted: HostedSession | undefined;
+ 		try {
+ 			hosted = await create(options.extensionFactories);
++			if (startupConfig?.model !== undefined) {
++				const available = await hosted.services.modelRuntime.getAvailable();
++				const model = available.find((candidate) => modelValue(candidate) === startupConfig.model);
++				if (model) await hosted.session.setModel(model);
++			}
++			if (startupConfig?.thinkingLevel !== undefined) {
++				const level = startupConfig.thinkingLevel as ThinkingLevel;
++				// Keep setModel's clamp when the requested effort is unsupported.
++				if (hosted.session.getAvailableThinkingLevels().includes(level)) {
++					hosted.session.setThinkingLevel(level);
++				}
++			}
+ 			sessions.set(sessionId, hosted);
+ 			return { hosted, configOptions: await config(hosted) };
+ 		} catch (error) {
+@@ -190,29 +236,36 @@
+ 	return {
+ 		async newSession(params) {
+ 			const cwd = validateRequest(params);
++			const startupConfig = readStartupConfig(params._meta);
+ 			const sessionManager = dependencies.createSessionManager(cwd);
+ 			const sessionId = sessionManager.getSessionId();
+ 			reserveSessionId(sessionId);
+-			const installed = await installSession(sessionId, (extensionFactories) =>
+-				dependencies.createRuntime(cwd, sessionManager, extensionFactories),
++			const installed = await installSession(
++				sessionId,
++				(extensionFactories) => dependencies.createRuntime(cwd, sessionManager, extensionFactories),
++				startupConfig,
+ 			);
+ 			return { sessionId, configOptions: installed.configOptions };
+ 		},
+ 		async loadSession(params) {
+ 			const cwd = validateRequest(params);
++			const startupConfig = readStartupConfig(params._meta);
+ 			reserveSessionId(params.sessionId);
+-			const installed = await installSession(params.sessionId, async (extensionFactories) => {
+-				const match = (await dependencies.listSessions(cwd)).find((entry) => entry.id === params.sessionId);
+-				if (!match) throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown session ID");
+-				if (normalize(resolve(match.cwd)) !== normalize(cwd)) {
+-					throw acp.RequestError.invalidParams({ cwd: params.cwd }, "Session belongs to a different working directory");
+-				}
+-				return dependencies.createRuntime(
+-					cwd,
+-					dependencies.openSessionManager(match.path),
+-					extensionFactories,
+-				);
+-			});
++			const installed = await installSession(
++				params.sessionId,
++				async (extensionFactories) => {
++					const match = (await dependencies.listSessions(cwd)).find((entry) => entry.id === params.sessionId);
++					if (!match) throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "Unknown session ID");
++					if (normalize(resolve(match.cwd)) !== normalize(cwd)) {
++						throw acp.RequestError.invalidParams(
++							{ cwd: params.cwd },
++							"Session belongs to a different working directory",
++						);
++					}
++					return dependencies.createRuntime(cwd, dependencies.openSessionManager(match.path), extensionFactories);
++				},
++				startupConfig,
++			);
+ 			await replaySessionHistory(params.sessionId, installed.hosted.session.messages ?? [], options.client);
+ 			return { configOptions: installed.configOptions };
+ 		},
+@@ -299,9 +352,7 @@
+ 		async dispose() {
+ 			if (disposed) return;
+ 			disposed = true;
+-			await Promise.all([...sessions.entries()].map(([sessionId, hosted]) =>
+-				disposeHosted(hosted),
+-			));
++			await Promise.all([...sessions.values()].map(disposeHosted));
+ 			sessions.clear();
+ 		},
+ 	};
+diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -1,25 +1,26 @@
+-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
++import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import * as acp from "@agentclientprotocol/sdk";
+-import type { Model } from "@earendil-works/pi-ai";
++import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
++import { clampThinkingLevel, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+ import { afterEach, describe, expect, it, vi } from "vitest";
++import { ENV_AGENT_DIR } from "../../src/config.ts";
++import { getDefaultSessionDir, SessionManager } from "../../src/core/session-manager.ts";
+ import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
+ import {
+-	createBangbooSessionHost,
+ 	type AcpSessionHost,
+ 	type AcpSessionHostDependencies,
++	createBangbooSessionHost,
+ 	type HostedSession,
+ } from "../../src/modes/acp/session-host.ts";
+-import { getDefaultSessionDir, SessionManager } from "../../src/core/session-manager.ts";
+-import { ENV_AGENT_DIR } from "../../src/config.ts";
+ 
+ function fakeHost(): AcpSessionHost {
+ 	return {
+ 		newSession: vi.fn(async () => ({ sessionId: "session-1", configOptions: [] })),
+ 		loadSession: vi.fn(async () => ({ configOptions: [] })),
+ 		setConfigOption: vi.fn(async () => ({ configOptions: [] })),
+-		prompt: vi.fn(async () => ({ stopReason: "end_turn" })),
++		prompt: vi.fn<AcpSessionHost["prompt"]>(async () => ({ stopReason: "end_turn" })),
+ 		cancel: vi.fn(async () => {}),
+ 		dispose: vi.fn(async () => {}),
+ 	};
+@@ -70,12 +71,20 @@
+ 	};
+ }
+ 
+-function createPolicyHarness(options: { listedCwd?: string; listedId?: string; runtimeIds?: string[] } = {}) {
++function createPolicyHarness(
++	options: {
++		listedCwd?: string;
++		listedId?: string;
++		runtimeIds?: string[];
++		createHosted?: (id: string) => ReturnType<typeof createHostedSession>;
++	} = {},
++) {
+ 	const hosted: ReturnType<typeof createHostedSession>[] = [];
+ 	let runtimeIndex = 0;
+ 	let managerIndex = 0;
+-	const createRuntime = vi.fn(async () => {
+-		const session = createHostedSession(options.runtimeIds?.[runtimeIndex++] ?? "session-1");
++	const createRuntime = vi.fn<AcpSessionHostDependencies["createRuntime"]>(async () => {
++		const id = options.runtimeIds?.[runtimeIndex++] ?? "session-1";
++		const session = (options.createHosted ?? createHostedSession)(id);
+ 		hosted.push(session);
+ 		return session;
+ 	});
+@@ -392,6 +401,224 @@
+ 	});
+ });
+ 
++describe.each(["new", "load"] as const)("Bangboo ACP session/%s startup configuration", (method) => {
++	const startupModels = [
++		{
++			provider: "zai-coding-cn",
++			id: "glm-5.3",
++			name: "GLM-5.3",
++			reasoning: true,
++			thinkingLevelMap: { off: null, minimal: null, low: "low", medium: null, high: "high", max: "max" },
++		},
++		{
++			provider: "xai",
++			id: "grok-4.7",
++			name: "Grok 4.7",
++			reasoning: true,
++			thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
++		},
++		{
++			provider: "openai",
++			id: "gpt-test",
++			name: "GPT",
++			reasoning: true,
++			thinkingLevelMap: {
++				off: "none",
++				minimal: "minimal",
++				low: "low",
++				medium: "medium",
++				high: "high",
++				xhigh: "xhigh",
++			},
++		},
++	] as Model<"openai-completions">[];
++
++	function createStartupHarness(model = startupModels[0], thinkingLevel: ThinkingLevel = "max") {
++		const harness = createPolicyHarness({
++			listedId: "session-1",
++			createHosted: (id) => {
++				const hosted = createHostedSession(id);
++				const state = hosted.session as unknown as {
++					model: Model<"openai-completions">;
++					thinkingLevel: ThinkingLevel;
++				};
++				state.model = model;
++				state.thinkingLevel = thinkingLevel;
++				vi.mocked(hosted.session.getAvailableThinkingLevels).mockImplementation(() =>
++					getSupportedThinkingLevels(state.model),
++				);
++				hosted.setThinkingLevel.mockImplementation((level: ThinkingLevel) => {
++					state.thinkingLevel = clampThinkingLevel(state.model, level);
++				});
++				hosted.setModel.mockImplementation(async (selected: Model<"openai-completions">) => {
++					state.model = selected;
++					hosted.session.setThinkingLevel(state.thinkingLevel);
++				});
++				vi.mocked(hosted.services.modelRuntime.getAvailable).mockResolvedValue(startupModels);
++				return hosted;
++			},
++		});
++		const start = (_meta?: acp.NewSessionRequest["_meta"]) => {
++			const params = { cwd: "/tmp/project", mcpServers: [], _meta };
++			return method === "new"
++				? harness.host.newSession(params)
++				: harness.host.loadSession({ ...params, sessionId: "session-1" });
++		};
++		return { ...harness, start };
++	}
++
++	it("applies the model before thinking and returns the selected model's snapshot", async () => {
++		const { start, hosted } = createStartupHarness();
++		const result = await start({
++			lody: {
++				sessionConfig: {
++					version: 1,
++					modelId: "xai/grok-4.7",
++					configOptionValues: { thought_level: "xhigh" },
++				},
++			},
++		});
++		expect(result.configOptions).toMatchObject([
++			{ id: "model", currentValue: "xai/grok-4.7" },
++			{
++				id: "thought_level",
++				currentValue: "xhigh",
++				options: [{ value: "low" }, { value: "medium" }, { value: "high" }, { value: "xhigh" }],
++			},
++		]);
++		expect(hosted[0].setModel).toHaveBeenCalledWith(startupModels[1]);
++		expect(hosted[0].setThinkingLevel).toHaveBeenLastCalledWith("xhigh");
++		expect(hosted[0].setModel.mock.invocationCallOrder[0]).toBeLessThan(
++			hosted[0].setThinkingLevel.mock.invocationCallOrder[0],
++		);
++	});
++
++	it.each(["max", "invalid"])("keeps the model-switch clamp for unsupported effort %s", async (thought_level) => {
++		const { start, hosted } = createStartupHarness();
++		const result = await start({
++			lody: {
++				sessionConfig: {
++					version: 1,
++					modelId: "xai/grok-4.7",
++					configOptionValues: { thought_level },
++				},
++			},
++		});
++		expect(result.configOptions).toMatchObject([{ currentValue: "xai/grok-4.7" }, { currentValue: "xhigh" }]);
++		expect(hosted[0].setThinkingLevel).toHaveBeenCalledTimes(1);
++		expect(hosted[0].setThinkingLevel).toHaveBeenCalledWith("max");
++	});
++
++	it.each(["off", "minimal", "medium", "xhigh"])(
++		"uses model config values and exposes GPT effort %s",
++		async (thought_level) => {
++			const { start } = createStartupHarness();
++			const result = await start({
++				lody: {
++					sessionConfig: {
++						version: 1,
++						configOptionValues: { model: "openai/gpt-test", thought_level, unrelated: true },
++					},
++				},
++			});
++			expect(result.configOptions).toMatchObject([
++				{ currentValue: "openai/gpt-test" },
++				{
++					currentValue: thought_level,
++					options: [
++						{ value: "off" },
++						{ value: "minimal" },
++						{ value: "low" },
++						{ value: "medium" },
++						{ value: "high" },
++						{ value: "xhigh" },
++					],
++				},
++			]);
++		},
++	);
++
++	it("prefers modelId over the model config value", async () => {
++		const { start } = createStartupHarness();
++		const result = await start({
++			lody: {
++				sessionConfig: {
++					version: 1,
++					modelId: "xai/grok-4.7",
++					configOptionValues: { model: "openai/gpt-test", thought_level: "medium" },
++				},
++			},
++		});
++		expect(result.configOptions).toMatchObject([{ currentValue: "xai/grok-4.7" }, { currentValue: "medium" }]);
++	});
++
++	it.each([
++		undefined,
++		{ unrelated: true },
++		{ lody: { turnId: "turn-1" } },
++		{ lody: { sessionConfig: { version: 1, configOptionValues: {} } } },
++		{
++			lody: {
++				sessionConfig: { version: 1, modelId: "unknown/model", configOptionValues: { thought_level: "xhigh" } },
++			},
++		},
++		{ lody: { sessionConfig: { version: 1, configOptionValues: { model: "unknown/model" } } } },
++		{ lody: { sessionConfig: { version: 1, configOptionValues: { thought_level: "invalid" } } } },
++	])("keeps the default configuration for absent or unsupported selections: %j", async (_meta) => {
++		const { start, hosted } = createStartupHarness();
++		const result = await start(_meta);
++		expect(result.configOptions).toMatchObject([
++			{ currentValue: "zai-coding-cn/glm-5.3" },
++			{ currentValue: "max", options: [{ value: "low" }, { value: "high" }, { value: "max" }] },
++		]);
++		expect(hosted[0].setModel).not.toHaveBeenCalled();
++		expect(hosted[0].setThinkingLevel).not.toHaveBeenCalled();
++	});
++
++	it("applies a supported effort without a model selection", async () => {
++		const { start, hosted } = createStartupHarness();
++		const result = await start({
++			lody: { sessionConfig: { version: 1, configOptionValues: { thought_level: "low" } } },
++		});
++		expect(result.configOptions).toMatchObject([{ currentValue: "zai-coding-cn/glm-5.3" }, { currentValue: "low" }]);
++		expect(hosted[0].setModel).not.toHaveBeenCalled();
++	});
++
++	it.each([
++		null,
++		"invalid",
++		[],
++		{},
++		{ version: 2, configOptionValues: {} },
++		{ version: 1, modelId: false, configOptionValues: {} },
++		{ version: 1, modelId: "", configOptionValues: {} },
++		{ version: 1, modelId: " ", configOptionValues: {} },
++		{ version: 1 },
++		{ version: 1, configOptionValues: [] },
++		{ version: 1, configOptionValues: null },
++		{ version: 1, configOptionValues: { unrelated: 1 } },
++		{ version: 1, configOptionValues: { model: false } },
++		{ version: 1, configOptionValues: { model: " " } },
++		{ version: 1, configOptionValues: { thought_level: true } },
++		{ version: 1, configOptionValues: { thought_level: " " } },
++	])("rejects malformed startup configuration before creating a runtime: %j", async (sessionConfig) => {
++		const { start, createRuntime } = createStartupHarness();
++		await expectInvalid(start({ lody: { sessionConfig } }));
++		expect(createRuntime).not.toHaveBeenCalled();
++		await expect(start()).resolves.toHaveProperty("configOptions");
++	});
++
++	if (method === "load") {
++		it("preserves restored model and effort when no sessionConfig is supplied", async () => {
++			const { start, hosted } = createStartupHarness(startupModels[1], "medium");
++			const result = await start({ lody: { turnId: "turn-1" } });
++			expect(result.configOptions).toMatchObject([{ currentValue: "xai/grok-4.7" }, { currentValue: "medium" }]);
++			expect(hosted[0].setModel).not.toHaveBeenCalled();
++			expect(hosted[0].setThinkingLevel).not.toHaveBeenCalled();
++		});
++	}
++});
++
+ describe("Bangboo ACP persisted session lookup", () => {
+ 	const originalCwd = process.cwd();
+ 	const originalAgentDir = process.env[ENV_AGENT_DIR];
+@@ -481,7 +708,9 @@
+ 			abort: vi.fn(async () => {}),
+ 			dispose: vi.fn(),
+ 		};
+-		const notify = vi.fn(async () => {});
++		const notify = vi.fn<
++			(method: typeof acp.methods.client.session.update, params: acp.SessionNotification) => Promise<void>
++		>(async () => {});
+ 		const hosted = {
+ 			session: session as never,
+ 			services: {
