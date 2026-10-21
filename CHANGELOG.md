@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added the `/compact` prompt command to native ACP mode. `session/new` and `session/load` publish it through the standard `available_commands_update` session update and the `availableCommands` response field, and `/compact [instructions]` runs native compaction with the interactive editor's exact command boundary instead of sending the text to the model. Success streams the compaction summary and a usage update; cancellation reuses the prompt cancel flow; failures return the native message (for example `Already compacted`) and leave the session usable.
+
 - Added ACP client MCP servers: client `mcpServers` entries connect over stdio or streamable HTTP through a session-scoped extension, with the same exposure and `mcp__<server>__<tool>` namespace as local servers. Local `mcp.json` entries and package registrations take precedence on collisions, client entries apply only to the session and are never written to `mcp.json`, and connection failures warn on stderr without stopping session startup.
 
 - Added ACP startup session configuration: `session/new` and `session/load` consume `_meta.lody.sessionConfig` version 1 and apply the model before the thinking level, keeping setModel's clamp for unsupported efforts. Invalid structures return `invalidParams`; unknown models and unsupported thinking levels are ignored, and loading without the metadata preserves the saved configuration.

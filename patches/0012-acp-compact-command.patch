@@ -1,0 +1,599 @@
+diff --git a/packages/coding-agent/docs/acp.md b/packages/coding-agent/docs/acp.md
+index 2dba95de..e273d426 100644
+--- a/packages/coding-agent/docs/acp.md
++++ b/packages/coding-agent/docs/acp.md
+@@ -21,6 +21,8 @@ Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo
+ 
+ ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported.
+ 
++The host executes the `/compact` prompt command locally instead of sending it to the model: `/compact` compacts the session context and `/compact <instructions>` passes the trailing text as compaction instructions. A successful compaction returns `end_turn`, streams the compaction summary and a usage update as standard session updates, and persists the compacted session. Cancellation returns `cancelled`; failures such as compacting an empty or already-compacted session return the native error message and leave the session usable. `session/new` and `session/load` publish the command through the standard `available_commands_update` session update and through the `availableCommands` field on the session response.
++
+ `session/new` and `session/load` consume `_meta.lody.sessionConfig` version 1 before returning model and thinking-level options. Invalid structures return `invalidParams`; unknown models and unsupported thinking levels are ignored. Loading without this metadata preserves the saved configuration.
+ 
+ Client `mcpServers` entries connect over stdio or streamable HTTP. Their tools use the same exposure and `mcp__<server>__<tool>` namespace as local MCP servers. Local `mcp.json` entries and package registrations take precedence on name or namespace collisions. Client entries apply only to this session and are never saved to `mcp.json`. Connection failures produce warnings on stderr and do not stop session startup.
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+index 6a7a94a7..399944ea 100644
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -25,6 +25,21 @@ export interface HostedSession {
+ 	services: AgentSessionServices;
+ }
+ 
++/** Prompt commands the ACP host executes locally. Published through both the
++ * standard available_commands_update session update and the session response
++ * field Youkai's capability cache reads. */
++export interface AcpCommandsResponse {
++	availableCommands: acp.AvailableCommand[];
++}
++
++const COMPACT_COMMANDS: acp.AvailableCommand[] = [
++	{
++		name: "compact",
++		description: "Compact the session context into a summary. Usage: /compact [instructions]",
++		input: { hint: "Optional instructions for the compaction summary" },
++	},
++];
++
+ export interface AcpSessionHostDependencies {
+ 	createRuntime(cwd: string, sessionManager: SessionManager, extensionFactories: InlineExtension[]): Promise<HostedSession>;
+ 	createSessionManager(cwd: string): SessionManager;
+@@ -33,8 +48,8 @@ export interface AcpSessionHostDependencies {
+ }
+ 
+ export interface AcpSessionHost {
+-	newSession(params: acp.NewSessionRequest): Promise<acp.NewSessionResponse>;
+-	loadSession(params: acp.LoadSessionRequest): Promise<acp.LoadSessionResponse>;
++	newSession(params: acp.NewSessionRequest): Promise<acp.NewSessionResponse & AcpCommandsResponse>;
++	loadSession(params: acp.LoadSessionRequest): Promise<acp.LoadSessionResponse & AcpCommandsResponse>;
+ 	setConfigOption(params: acp.SetSessionConfigOptionRequest): Promise<acp.SetSessionConfigOptionResponse>;
+ 	prompt(params: acp.PromptRequest): Promise<acp.PromptResponse>;
+ 	cancel(params: acp.CancelNotification): Promise<void>;
+@@ -92,6 +107,22 @@ function settledStopReason(session: AgentSession): acp.StopReason | undefined {
+ 	return undefined;
+ }
+ 
++/** Mirrors the interactive editor's /compact boundary: the exact command or the
++ * command followed by a space and optional instructions. Returns undefined for
++ * every other text so near-misses like /compact-foo stay ordinary prompts. */
++function parseCompactCommand(text: string): { instructions?: string } | undefined {
++	if (text === "/compact") return {};
++	if (text.startsWith("/compact ")) {
++		const instructions = text.slice("/compact ".length).trim();
++		return instructions ? { instructions } : {};
++	}
++	return undefined;
++}
++
++function compactionSummaryMessage(result: { summary: string; tokensBefore: number }): string {
++	return `**Compacted from ${result.tokensBefore.toLocaleString()} tokens**\n\n${result.summary}`;
++}
++
+ export async function buildSessionConfig(
+ 	session: AgentSession,
+ 	models: readonly Model<any>[],
+@@ -199,6 +230,13 @@ export function createBangbooSessionHost(options: {
+ 		return hosted;
+ 	}
+ 
++	async function announceCommands(sessionId: string): Promise<void> {
++		await options.client.notify(acp.methods.client.session.update, {
++			sessionId,
++			update: { sessionUpdate: "available_commands_update", availableCommands: COMPACT_COMMANDS },
++		});
++	}
++
+ 	function reserveSessionId(sessionId: string): void {
+ 		if (sessions.size > 0 || reservedSessionIds.size > 0) {
+ 			throw acp.RequestError.invalidParams({ sessionId }, "This ACP process already hosts a session");
+@@ -263,7 +301,8 @@ export function createBangbooSessionHost(options: {
+ 				startupConfig,
+ 				params.mcpServers,
+ 			);
+-			return { sessionId, configOptions: installed.configOptions };
++			await announceCommands(sessionId);
++			return { sessionId, configOptions: installed.configOptions, availableCommands: COMPACT_COMMANDS };
+ 		},
+ 		async loadSession(params) {
+ 			const cwd = validateRequest(params);
+@@ -286,7 +325,8 @@ export function createBangbooSessionHost(options: {
+ 				params.mcpServers,
+ 			);
+ 			await replaySessionHistory(params.sessionId, installed.hosted.session.messages ?? [], options.client);
+-			return { configOptions: installed.configOptions };
++			await announceCommands(params.sessionId);
++			return { configOptions: installed.configOptions, availableCommands: COMPACT_COMMANDS };
+ 		},
+ 		async setConfigOption(params) {
+ 			const hosted = getSession(params.sessionId);
+@@ -315,25 +355,40 @@ export function createBangbooSessionHost(options: {
+ 				throw acp.RequestError.invalidParams({ sessionId: params.sessionId }, "A prompt is already running");
+ 			}
+ 			const converted = toBangbooPrompt(params.prompt, hosted.session.model?.input.includes("image") === true);
++			const compactCommand = parseCompactCommand(converted.text);
++			if (compactCommand && converted.images.length > 0) {
++				throw acp.RequestError.invalidParams(undefined, "Images cannot be combined with /compact");
++			}
+ 			const run = (async (): Promise<acp.PromptResponse> => {
+ 				let delivery = Promise.resolve();
+-				const unsubscribe = hosted.session.subscribe((event) => {
+-					for (const update of mapAgentSessionEvent(event)) {
+-						delivery = delivery.then(() =>
+-							options.client.notify(acp.methods.client.session.update, { sessionId: params.sessionId, update }),
+-						);
+-					}
+-					if (event.type === "agent_settled") {
+-						const usage = hosted.session.getContextUsage();
+-						if (usage?.tokens != null && usage.contextWindow != null) {
+-							delivery = delivery.then(() => options.client.notify(acp.methods.client.session.update, {
+-								sessionId: params.sessionId,
+-								update: { sessionUpdate: "usage_update", used: usage.tokens, size: usage.contextWindow },
+-							}));
+-						}
++				const queueUpdate = (update: acp.SessionUpdate): void => {
++					delivery = delivery.then(() =>
++						options.client.notify(acp.methods.client.session.update, { sessionId: params.sessionId, update }),
++					);
++				};
++				const queueUsage = (): void => {
++					const usage = hosted.session.getContextUsage();
++					if (usage?.tokens != null && usage.contextWindow != null) {
++						queueUpdate({ sessionUpdate: "usage_update", used: usage.tokens, size: usage.contextWindow });
+ 					}
++				};
++				const unsubscribe = hosted.session.subscribe((event) => {
++					for (const update of mapAgentSessionEvent(event)) queueUpdate(update);
++					if (event.type === "agent_settled") queueUsage();
+ 				});
+ 				try {
++					if (compactCommand) {
++						const result = await hosted.session.compact(compactCommand.instructions);
++						queueUpdate({
++							sessionUpdate: "agent_message_chunk",
++							content: { type: "text", text: compactionSummaryMessage(result) },
++						});
++						queueUsage();
++						await delivery;
++						return {
++							stopReason: cancelledPrompts.has(params.sessionId) ? "cancelled" : "end_turn",
++						};
++					}
+ 					await hosted.session.prompt(converted.text, { images: converted.images, source: "rpc" });
+ 					await delivery;
+ 					return {
+@@ -345,8 +400,10 @@ export function createBangbooSessionHost(options: {
+ 					await delivery;
+ 					const message = error instanceof Error ? error.message : String(error);
+ 					if (cancelledPrompts.has(params.sessionId) || /abort|cancel/i.test(message)) return { stopReason: "cancelled" };
+-					if (/context|token limit|too long/i.test(message)) return { stopReason: "max_tokens" };
+-					if (/refus/i.test(message)) return { stopReason: "refusal" };
++					if (!compactCommand) {
++						if (/context|token limit|too long/i.test(message)) return { stopReason: "max_tokens" };
++						if (/refus/i.test(message)) return { stopReason: "refusal" };
++					}
+ 					throw error;
+ 				} finally {
+ 					unsubscribe();
+diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
+index ea937b1d..32da04e1 100644
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -124,7 +124,7 @@ function createPolicyHarness(
+ 		),
+ 	};
+ 	const host = createBangbooSessionHost({
+-		client: {} as acp.AgentContext,
++		client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 		extensionFactories: [],
+ 		dependencies,
+ 	});
+@@ -268,7 +268,7 @@ describe("Bangboo ACP session host policy", () => {
+ 			.mockResolvedValueOnce(hosted);
+ 		let managerIndex = 0;
+ 		const host = createBangbooSessionHost({
+-			client: {} as acp.AgentContext,
++			client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 			extensionFactories: [],
+ 			dependencies: {
+ 				createRuntime,
+@@ -296,7 +296,7 @@ describe("Bangboo ACP session host policy", () => {
+ 		});
+ 		let managerIndex = 0;
+ 		const host = createBangbooSessionHost({
+-			client: {} as acp.AgentContext,
++			client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 			extensionFactories: [],
+ 			dependencies: {
+ 				createRuntime,
+@@ -325,7 +325,7 @@ describe("Bangboo ACP session host policy", () => {
+ 		});
+ 		const sessionManager = { getSessionId: () => "session-1" } as SessionManager;
+ 		const host = createBangbooSessionHost({
+-			client: {} as acp.AgentContext,
++			client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 			extensionFactories: [],
+ 			dependencies: {
+ 				createRuntime,
+@@ -369,7 +369,7 @@ describe("Bangboo ACP session host policy", () => {
+ 		});
+ 		const createRuntime = vi.fn(async () => hosted);
+ 		const host = createBangbooSessionHost({
+-			client: {} as acp.AgentContext,
++			client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 			extensionFactories: [],
+ 			dependencies: {
+ 				listSessions,
+@@ -657,7 +657,7 @@ describe.each(["new", "load"] as const)("Bangboo ACP session/%s client MCP serve
+ 		let harness: Harness;
+ 		let api: ExtensionAPI;
+ 		const host = createBangbooSessionHost({
+-			client: {} as acp.AgentContext,
++			client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 			extensionFactories: [],
+ 			dependencies: {
+ 				...createPolicyHarness({ listedId: "session-1" }).dependencies,
+@@ -813,7 +813,7 @@ describe("Bangboo ACP persisted session lookup", () => {
+ 			return createHostedSession(manager.getSessionId());
+ 		});
+ 		const host = createBangbooSessionHost({
+-			client: {} as acp.AgentContext,
++			client: { notify: vi.fn(async () => {}) } as unknown as acp.AgentContext,
+ 			extensionFactories: [],
+ 			dependencies: { createRuntime },
+ 		});
+@@ -918,6 +918,8 @@ describe("Bangboo ACP prompt streaming", () => {
+ 				emit({ type: "agent_settled" });
+ 			},
+ 		});
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		harness.notify.mockClear();
+ 		harness.notify.mockImplementation(async (_method, params) => {
+ 			concurrent++;
+ 			maximum = Math.max(maximum, concurrent);
+@@ -925,7 +927,6 @@ describe("Bangboo ACP prompt streaming", () => {
+ 			await new Promise((resolve) => setTimeout(resolve, 1));
+ 			concurrent--;
+ 		});
+-		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
+ 		await expect(harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] })).resolves.toEqual({ stopReason: "end_turn" });
+ 		expect(maximum).toBe(1);
+ 		expect(order).toEqual(["tool_call", "tool_call_update", "usage_update"]);
+@@ -935,6 +936,7 @@ describe("Bangboo ACP prompt streaming", () => {
+ 	it("omits usage when either value is unknown", async () => {
+ 		const harness = createPromptHarness({ usage: { tokens: null, contextWindow: 100 }, prompt: async (emit) => emit({ type: "agent_settled" }) });
+ 		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		harness.notify.mockClear();
+ 		await harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] });
+ 		expect(harness.notify).not.toHaveBeenCalled();
+ 	});
+@@ -957,6 +959,7 @@ describe("Bangboo ACP prompt streaming", () => {
+ 			settle();
+ 		});
+ 		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		harness.notify.mockClear();
+ 		const prompt = harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "go" }] });
+ 		await vi.waitFor(() => expect(harness.session.prompt).toHaveBeenCalled());
+ 		await harness.host.cancel({ sessionId: "session-1" });
+@@ -975,3 +978,323 @@ describe("Bangboo ACP prompt streaming", () => {
+ 		expect(harness.session.abort).not.toHaveBeenCalled();
+ 	});
+ });
++
++describe("Bangboo ACP compact command", () => {
++	const realHarnesses: Harness[] = [];
++	const realRoots: string[] = [];
++
++	afterEach(async () => {
++		for (const harness of realHarnesses.splice(0)) harness.cleanup();
++		for (const root of realRoots.splice(0)) rmSync(root, { recursive: true, force: true });
++		vi.restoreAllMocks();
++	});
++
++	function createCompactHarness(options: { imageModel?: boolean } = {}) {
++		const session = {
++			model: { ...models[0], input: options.imageModel ? ["text", "image"] : ["text"] },
++			thinkingLevel: "high",
++			messages: [],
++			getAvailableThinkingLevels: vi.fn(() => ["off", "high"]),
++			bindExtensions: vi.fn(async () => {}),
++			getContextUsage: vi.fn(() => ({ tokens: 42, contextWindow: 1000 })),
++			subscribe: vi.fn(() => vi.fn()),
++			prompt: vi.fn(async () => {}),
++			compact: vi.fn(async () => ({ summary: "compacted", tokensBefore: 120 })),
++			abort: vi.fn(async () => {}),
++			dispose: vi.fn(),
++		};
++		const notify = vi.fn<
++			(method: typeof acp.methods.client.session.update, params: acp.SessionNotification) => Promise<void>
++		>(async () => {});
++		const hosted = {
++			session: session as never,
++			services: {
++				modelRuntime: { getAvailable: vi.fn(async () => models) },
++				settingsManager: { flush: vi.fn(async () => {}) },
++			} as never,
++		};
++		const host = createBangbooSessionHost({
++			client: { notify } as unknown as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createSessionManager: () => ({ getSessionId: () => "session-1" }) as SessionManager,
++				openSessionManager: vi.fn(() => ({}) as SessionManager),
++				listSessions: vi.fn(async () => [
++					{
++						id: "session-1",
++						cwd: "/tmp/project",
++						path: "/sessions/session.jsonl",
++						created: new Date(),
++						modified: new Date(),
++						messageCount: 1,
++						firstMessage: "persisted",
++						allMessagesText: "persisted",
++					},
++				]),
++				createRuntime: vi.fn(async () => hosted),
++			},
++		});
++		return { host, session, notify };
++	}
++
++	it("announces the compact command on new and load responses and notifications", async () => {
++		const created = createCompactHarness();
++		const newResponse = await created.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		expect(newResponse.availableCommands?.map((command) => command.name)).toEqual(["compact"]);
++		expect(newResponse.availableCommands?.[0]?.description).toBeTruthy();
++		expect(created.notify).toHaveBeenCalledWith(acp.methods.client.session.update, {
++			sessionId: "session-1",
++			update: {
++				sessionUpdate: "available_commands_update",
++				availableCommands: [expect.objectContaining({ name: "compact" })],
++			},
++		});
++
++		const loaded = createCompactHarness();
++		(loaded.session as unknown as { messages: unknown[] }).messages = [
++			{ role: "user", content: "persisted", timestamp: 1 },
++		];
++		const loadResponse = await loaded.host.loadSession({
++			cwd: "/tmp/project",
++			sessionId: "session-1",
++			mcpServers: [],
++		});
++		expect(loadResponse.availableCommands?.map((command) => command.name)).toEqual(["compact"]);
++		const updates = loaded.notify.mock.calls.map((call) => call[1].update.sessionUpdate);
++		expect(updates.at(-1)).toBe("available_commands_update");
++		expect(updates).toContain("user_message_chunk");
++	});
++
++	it("routes /compact to native compaction and reports the result over standard updates", async () => {
++		const harness = createCompactHarness();
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expect(
++			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "/compact" }] }),
++		).resolves.toEqual({ stopReason: "end_turn" });
++		expect(harness.session.compact).toHaveBeenCalledWith(undefined);
++		expect(harness.session.prompt).not.toHaveBeenCalled();
++		const updates = harness.notify.mock.calls.map((call) => call[1].update);
++		expect(
++			updates.find(
++				(update) =>
++					update.sessionUpdate === "agent_message_chunk" &&
++					update.content.type === "text" &&
++					update.content.text.includes("Compacted from 120 tokens") &&
++					update.content.text.includes("compacted"),
++			),
++		).toBeTruthy();
++		expect(updates.at(-1)).toMatchObject({ sessionUpdate: "usage_update", used: 42, size: 1000 });
++	});
++
++	it("passes trailing text as compaction instructions", async () => {
++		const harness = createCompactHarness();
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await harness.host.prompt({
++			sessionId: "session-1",
++			prompt: [{ type: "text", text: "/compact focus on deployment" }],
++		});
++		expect(harness.session.compact).toHaveBeenCalledWith("focus on deployment");
++	});
++
++	it("keeps non-command and partial-match text on the ordinary prompt path", async () => {
++		const harness = createCompactHarness();
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		for (const text of ["/compact-foo", "please run /compact later", "/compacting"]) {
++			await harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text }] });
++			expect(harness.session.prompt).toHaveBeenLastCalledWith(text, { images: [], source: "rpc" });
++		}
++		expect(harness.session.compact).not.toHaveBeenCalled();
++	});
++
++	it("rejects a duplicate submission while compaction runs and completes the first", async () => {
++		const harness = createCompactHarness();
++		let release!: () => void;
++		const gate = new Promise<void>((resolve) => {
++			release = resolve;
++		});
++		harness.session.compact.mockImplementation(async () => {
++			await gate;
++			return { summary: "compacted", tokensBefore: 120 };
++		});
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		const first = harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "/compact" }] });
++		await vi.waitFor(() => expect(harness.session.compact).toHaveBeenCalled());
++		await expectInvalid(
++			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "/compact" }] }),
++		);
++		release();
++		await expect(first).resolves.toEqual({ stopReason: "end_turn" });
++	});
++
++	it("cancels an in-flight compaction without reporting a summary", async () => {
++		const harness = createCompactHarness();
++		let rejectCompact!: (error: Error) => void;
++		const gate = new Promise<never>((_, reject) => {
++			rejectCompact = reject;
++		});
++		harness.session.compact.mockImplementation(async () => {
++			harness.session.abort.mockImplementation(async () => rejectCompact(new Error("Compaction aborted")));
++			await gate;
++		});
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		const compacting = harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "/compact" }] });
++		await vi.waitFor(() => expect(harness.session.compact).toHaveBeenCalled());
++		await harness.host.cancel({ sessionId: "session-1" });
++		await expect(compacting).resolves.toEqual({ stopReason: "cancelled" });
++		expect(
++			harness.notify.mock.calls.filter(([, params]) => params.update.sessionUpdate === "agent_message_chunk"),
++		).toHaveLength(0);
++	});
++
++	it("surfaces compaction failures and keeps the session promptable", async () => {
++		const harness = createCompactHarness();
++		harness.session.compact.mockRejectedValue(new Error("Already compacted"));
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expect(
++			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "/compact" }] }),
++		).rejects.toThrow("Already compacted");
++		await expect(
++			harness.host.prompt({ sessionId: "session-1", prompt: [{ type: "text", text: "hello" }] }),
++		).resolves.toEqual({ stopReason: "end_turn" });
++		expect(harness.session.prompt).toHaveBeenCalledWith("hello", { images: [], source: "rpc" });
++	});
++
++	it("rejects images combined with /compact", async () => {
++		const harness = createCompactHarness({ imageModel: true });
++		await harness.host.newSession({ cwd: "/tmp/project", mcpServers: [] });
++		await expectInvalid(
++			harness.host.prompt({
++				sessionId: "session-1",
++				prompt: [
++					{ type: "text", text: "/compact" },
++				{ type: "image", data: "aGk=", mimeType: "image/png" },
++				],
++			}),
++		);
++		expect(harness.session.compact).not.toHaveBeenCalled();
++	});
++
++	it("compacts a real session, persists it, and announces the command after reload", async () => {
++		const root = mkdtempSync(join(tmpdir(), "bangboo-acp-compact-"));
++		realRoots.push(root);
++		const manager = SessionManager.create(root);
++		const instructionsSeen: (string | undefined)[] = [];
++		const createCompactingHarness = async (sessionManager: SessionManager) => {
++			const harness = await createHarness({
++				sessionManager,
++				settings: { compaction: { keepRecentTokens: 1 } },
++				extensionFactories: [
++					(pi) => {
++						pi.on("session_before_compact", async (event) => {
++							instructionsSeen.push(event.customInstructions);
++							return {
++								compaction: {
++									summary: "summary from extension",
++									firstKeptEntryId: event.preparation.firstKeptEntryId,
++									tokensBefore: event.preparation.tokensBefore,
++								},
++							};
++						});
++					},
++				],
++			});
++			realHarnesses.push(harness);
++			return harness;
++		};
++		const harness = await createCompactingHarness(manager);
++		const now = Date.now();
++		manager.appendMessage({ role: "user", content: [{ type: "text", text: "message to compact" }], timestamp: now - 1000 });
++		manager.appendMessage({
++			role: "assistant",
++			content: [{ type: "text", text: "assistant response to compact" }],
++			api: "anthropic-messages",
++			provider: "anthropic",
++			model: "test",
++			usage: {
++				input: 1,
++				output: 1,
++				cacheRead: 0,
++				cacheWrite: 0,
++				totalTokens: 2,
++				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++			},
++			stopReason: "stop",
++			timestamp: now - 500,
++		});
++		harness.session.agent.state.messages = manager.buildSessionContext().messages;
++
++		const notify = vi.fn(async () => {});
++		const host = createBangbooSessionHost({
++			client: { notify } as unknown as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createSessionManager: () => manager,
++				createRuntime: async () => ({
++					session: harness.session,
++					services: {
++						modelRuntime: { getAvailable: async () => harness.models },
++						settingsManager: harness.settingsManager,
++					} as never,
++				}),
++			},
++		});
++		await host.newSession({ cwd: root, mcpServers: [] });
++		await expect(
++			host.prompt({
++				sessionId: manager.getSessionId(),
++				prompt: [{ type: "text", text: "/compact focus on the goal" }],
++			}),
++		).resolves.toEqual({ stopReason: "end_turn" });
++		expect(instructionsSeen).toEqual(["focus on the goal"]);
++		expect(
++			manager.getEntries().some((entry) => entry.type === "compaction"),
++		).toBe(true);
++		expect(
++			notify.mock.calls.some(
++				([, params]) =>
++					params.update.sessionUpdate === "agent_message_chunk" &&
++					params.update.content.type === "text" &&
++					params.update.content.text.includes("summary from extension"),
++			),
++		).toBe(true);
++		await host.dispose();
++
++		const listed = (await SessionManager.list(root)).find((entry) => entry.id === manager.getSessionId());
++		expect(listed).toBeTruthy();
++		const reloaded = SessionManager.open(listed!.path);
++		expect(
++			reloaded.getEntries().some(
++				(entry) => entry.type === "compaction" && entry.summary === "summary from extension",
++			),
++		).toBe(true);
++		const harness2 = await createCompactingHarness(reloaded);
++		const notify2 = vi.fn(async () => {});
++		const host2 = createBangbooSessionHost({
++			client: { notify: notify2 } as unknown as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				createSessionManager: () => manager,
++				openSessionManager: (path) => SessionManager.open(path),
++				listSessions: (cwd) => SessionManager.list(cwd),
++				createRuntime: async () => ({
++				session: harness2.session,
++				services: {
++					modelRuntime: { getAvailable: async () => harness2.models },
++					settingsManager: harness2.settingsManager,
++					} as never,
++				}),
++			},
++		});
++		const loadResponse = await host2.loadSession({ cwd: root, sessionId: reloaded.getSessionId(), mcpServers: [] });
++		expect(loadResponse.availableCommands?.map((command) => command.name)).toEqual(["compact"]);
++		expect(
++			notify2.mock.calls.some(
++				([, params]) =>
++					params.update.sessionUpdate === "user_message_chunk" &&
++				params.update.content.type === "text" &&
++				params.update.content.text.includes("message to compact"),
++			),
++		).toBe(false);
++		await host2.dispose();
++	});
++});
