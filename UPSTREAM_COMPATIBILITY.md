@@ -1,8 +1,8 @@
 # Upstream compatibility
 
-- Runtime: `1.1.0`
-- Tag: `v1.1.0`
-- Commit: `abe508e1b89912adde45528136c3221eb69acdd7`
+- Runtime: `1.3.0`
+- Tag: `v1.3.0`
+- Commit: `71023aec1546d6d677a65669c5665c0927ce0dd0`
 - Status: pending CI validation
 
 Validation covers the pristine upstream test suite before branding patches, patch replay checks, lower-runtime and Bangboo builds, brand/path/network assertions, current and historical extension imports, conventional package resources, packed installation, upgrade, executable entry, and uninstall smoke tests.
