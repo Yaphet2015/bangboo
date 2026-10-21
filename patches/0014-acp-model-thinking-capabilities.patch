@@ -1,0 +1,166 @@
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -1,7 +1,7 @@
+ import { isAbsolute, normalize, resolve } from "node:path";
+ import * as acp from "@agentclientprotocol/sdk";
+ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+-import type { Model } from "@earendil-works/pi-ai";
++import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+ import { Type } from "typebox";
+ import { Check } from "typebox/value";
+ import { getAgentDir } from "../../config.ts";
+@@ -149,6 +149,21 @@
+ 			options: session.getAvailableThinkingLevels().map((level) => ({ value: level, name: level })),
+ 		},
+ 	];
++}
++
++/** Publish all authenticated models so clients can render a target model's
++ * controls before sending a prompt or mutating the live session. */
++function buildModelCapabilitiesMeta(models: readonly Model<any>[]): NonNullable<acp.NewSessionResponse["_meta"]> {
++	return {
++		lody: {
++			modelCapabilities: {
++				version: 1,
++				models: Object.fromEntries(
++					models.map((model) => [modelValue(model), { effortValues: getSupportedThinkingLevels(model) }]),
++				),
++			},
++		},
++	};
+ }
+ 
+ function validateRequest(params: { cwd: string; mcpServers: acp.McpServer[]; additionalDirectories?: string[] }): string {
+@@ -252,7 +267,11 @@
+ 		create: (extensionFactories: InlineExtension[]) => Promise<HostedSession>,
+ 		startupConfig?: StartupSessionConfig,
+ 		mcpServers: readonly acp.McpServer[] = [],
+-	): Promise<{ hosted: HostedSession; configOptions: acp.SessionConfigOption[] }> {
++	): Promise<{
++		hosted: HostedSession;
++		configOptions: acp.SessionConfigOption[];
++		_meta: NonNullable<acp.NewSessionResponse["_meta"]>;
++	}> {
+ 		const hasMcpServers = mcpServers.length > 0;
+ 		let hosted: HostedSession | undefined;
+ 		try {
+@@ -279,7 +298,12 @@
+ 				});
+ 			}
+ 			sessions.set(sessionId, hosted);
+-			return { hosted, configOptions: await config(hosted) };
++			const models = await hosted.services.modelRuntime.getAvailable();
++			return {
++				hosted,
++				configOptions: await buildSessionConfig(hosted.session, models),
++				_meta: buildModelCapabilitiesMeta(models),
++			};
+ 		} catch (error) {
+ 			if (hosted) {
+ 				sessions.delete(sessionId);
+@@ -305,7 +329,12 @@
+ 				params.mcpServers,
+ 			);
+ 			await announceCommands(sessionId);
+-			return { sessionId, configOptions: installed.configOptions, availableCommands: COMPACT_COMMANDS };
++			return {
++				sessionId,
++				configOptions: installed.configOptions,
++				availableCommands: COMPACT_COMMANDS,
++				_meta: installed._meta,
++			};
+ 		},
+ 		async loadSession(params) {
+ 			const cwd = validateRequest(params);
+@@ -329,7 +358,7 @@
+ 			);
+ 			await replaySessionHistory(params.sessionId, installed.hosted.session.messages ?? [], options.client);
+ 			await announceCommands(params.sessionId);
+-			return { configOptions: installed.configOptions, availableCommands: COMPACT_COMMANDS };
++			return { configOptions: installed.configOptions, availableCommands: COMPACT_COMMANDS, _meta: installed._meta };
+ 		},
+ 		async setConfigOption(params) {
+ 			const hosted = getSession(params.sessionId);
+diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -441,6 +441,21 @@
+ 				xhigh: "xhigh",
+ 			},
+ 		},
++		{
++			provider: "openai",
++			id: "five-level",
++			name: "Five levels",
++			reasoning: true,
++			thinkingLevelMap: {
++				off: null,
++				minimal: "minimal",
++				low: "low",
++				medium: "medium",
++				high: "high",
++				xhigh: "xhigh",
++			},
++		},
++		{ provider: "example", id: "no-reasoning", name: "No reasoning", reasoning: false },
+ 	] as Model<"openai-completions">[];
+ 
+ 	function createStartupHarness(model = startupModels[0], thinkingLevel: ThinkingLevel = "max") {
+@@ -476,6 +491,47 @@
+ 		};
+ 		return { ...harness, start };
+ 	}
++
++	it("publishes each model's thinking levels before any model switch", async () => {
++		const { host } = createStartupHarness();
++		try {
++			const result = await acp
++				.client({ name: "model-capabilities-test" })
++				.connectWith(createAcpAgentApp({ hostFactory: () => host }), (agent) =>
++					method === "new"
++						? agent.request(acp.methods.agent.session.new, { cwd: "/tmp/project", mcpServers: [] })
++						: agent.request(acp.methods.agent.session.load, {
++								cwd: "/tmp/project",
++								mcpServers: [],
++								sessionId: "session-1",
++							}),
++				);
++			expect(result._meta).toMatchObject({
++				lody: {
++					modelCapabilities: {
++						version: 1,
++						models: {
++							"zai-coding-cn/glm-5.3": { effortValues: ["low", "high", "max"] },
++							"xai/grok-4.7": { effortValues: ["low", "medium", "high", "xhigh"] },
++							"openai/gpt-test": { effortValues: ["off", "minimal", "low", "medium", "high", "xhigh"] },
++							"openai/five-level": { effortValues: ["minimal", "low", "medium", "high", "xhigh"] },
++							"example/no-reasoning": { effortValues: ["off"] },
++						},
++					},
++				},
++			});
++			const switched = await host.setConfigOption({
++				sessionId: "session-1",
++				configId: "model",
++				value: "openai/five-level",
++			});
++			expect(switched.configOptions.find((option) => option.id === "thought_level")?.options).toEqual(
++				["minimal", "low", "medium", "high", "xhigh"].map((value) => ({ value, name: value })),
++			);
++		} finally {
++			await host.dispose();
++		}
++	});
+ 
+ 	it("applies the model before thinking and returns the selected model's snapshot", async () => {
+ 		const { start, hosted } = createStartupHarness();
+diff --git a/packages/coding-agent/docs/acp.md b/packages/coding-agent/docs/acp.md
+--- a/packages/coding-agent/docs/acp.md
++++ b/packages/coding-agent/docs/acp.md
+@@ -28,3 +28,5 @@
+ Client `mcpServers` entries connect over stdio or streamable HTTP. Their tools use the same exposure and `mcp__<server>__<tool>` namespace as local MCP servers. Local `mcp.json` entries and package registrations take precedence on name or namespace collisions. Client entries apply only to this session and are never saved to `mcp.json`. Connection failures produce warnings on stderr and do not stop session startup.
+ 
+ ACP mode runs every tool with full permission. Tool calls are never sent to the client for approval. Connect only from clients and projects that you trust.
++
++`session/new` and `session/load` also publish `_meta.lody.modelCapabilities` version 1. Each authenticated model is keyed by its full `provider/model` ID and declares `effortValues` from the runtime's `getSupportedThinkingLevels` function. This lets clients show the selected model's own thinking levels before sending a prompt. `configOptions` still describe the current model; `session/set_config_option` returns its updated options after a model change. A model without reasoning declares `["off"]`, matching the native session control.

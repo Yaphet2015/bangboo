@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed model-specific thinking levels in ACP clients. Session creation and loading now publish every authenticated model's effort levels through `_meta.lody.modelCapabilities` v1, using the runtime model metadata. Switching from a three-level model to a five-level model no longer keeps the startup model's three options.
+
 - Added ACP tool input streaming: clients that advertise `_meta.lody.toolInputStream` version 1 receive `_lody/session/tool_input` start, delta, and end notifications carrying the provider's raw argument fragments while a tool call is still streaming. Streams snapshot the start state, cap at 1 MiB with 64 KiB deltas, and end as cancelled, failed, or incomplete when the prompt is cancelled, fails, or the host shuts down.
 
 - Added the `/compact` prompt command to native ACP mode. `session/new` and `session/load` publish it through the standard `available_commands_update` session update and the `availableCommands` response field, and `/compact [instructions]` runs native compaction with the interactive editor's exact command boundary instead of sending the text to the model. Success streams the compaction summary and a usage update; cancellation reuses the prompt cancel flow; failures return the native message (for example `Already compacted`) and leave the session usable.
