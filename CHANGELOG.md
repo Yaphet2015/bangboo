@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added ACP tool input streaming: clients that advertise `_meta.lody.toolInputStream` version 1 receive `_lody/session/tool_input` start, delta, and end notifications carrying the provider's raw argument fragments while a tool call is still streaming. Streams snapshot the start state, cap at 1 MiB with 64 KiB deltas, and end as cancelled, failed, or incomplete when the prompt is cancelled, fails, or the host shuts down.
+
 - Added the `/compact` prompt command to native ACP mode. `session/new` and `session/load` publish it through the standard `available_commands_update` session update and the `availableCommands` response field, and `/compact [instructions]` runs native compaction with the interactive editor's exact command boundary instead of sending the text to the model. Success streams the compaction summary and a usage update; cancellation reuses the prompt cancel flow; failures return the native message (for example `Already compacted`) and leave the session usable.
 
 - Added ACP client MCP servers: client `mcpServers` entries connect over stdio or streamable HTTP through a session-scoped extension, with the same exposure and `mcp__<server>__<tool>` namespace as local servers. Local `mcp.json` entries and package registrations take precedence on collisions, client entries apply only to the session and are never written to `mcp.json`, and connection failures warn on stderr without stopping session startup.

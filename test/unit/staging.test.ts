@@ -24,6 +24,6 @@ describe("buildStagingCommands", () => {
     const patchDir = new URL("../../patches/", import.meta.url);
     const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
 
-    expect(patches.at(-1)).toBe("0012-acp-compact-command.patch");
+    expect(patches.at(-1)).toBe("0013-acp-tool-input-stream.patch");
   });
 });

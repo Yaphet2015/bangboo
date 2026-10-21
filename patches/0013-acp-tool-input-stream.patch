@@ -1,0 +1,413 @@
+diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
+--- a/packages/coding-agent/src/modes/acp/acp-mode.ts
++++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
+@@ -3,17 +3,24 @@
+ import { APP_NAME, VERSION } from "../../config.ts";
+ import { builtInExtensions } from "../../extensions/index.ts";
+ import { type AcpSessionHost, createBangbooSessionHost } from "./session-host.ts";
++import { clientWantsToolInputStream } from "./tool-input-stream.ts";
+ 
+ export interface AcpModeOptions {
+ 	version?: string;
+-	hostFactory?: (client: acp.AgentContext) => AcpSessionHost;
++	hostFactory?: (client: acp.AgentContext, toolInputStream: boolean) => AcpSessionHost;
+ }
+ 
+ export function createAcpAgentApp(options: AcpModeOptions = {}): acp.AgentApp {
+ 	let host: AcpSessionHost | undefined;
++	let clientWantsToolInput = false;
+ 	const getHost = (client: acp.AgentContext): AcpSessionHost => {
+ 		host ??=
+-			options.hostFactory?.(client) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
++			options.hostFactory?.(client, clientWantsToolInput) ??
++			createBangbooSessionHost({
++				client,
++				extensionFactories: builtInExtensions,
++				toolInputStream: clientWantsToolInput,
++			});
+ 		return host;
+ 	};
+ 	return (
+@@ -26,6 +33,7 @@
+ 						`Unsupported ACP protocol version; expected ${acp.PROTOCOL_VERSION}`,
+ 					);
+ 				}
++				clientWantsToolInput = clientWantsToolInputStream(params.clientCapabilities);
+ 				return {
+ 					protocolVersion: acp.PROTOCOL_VERSION,
+ 					agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
+@@ -33,6 +41,9 @@
+ 						loadSession: true,
+ 						promptCapabilities: { image: true },
+ 						mcpCapabilities: { http: true },
++						...(clientWantsToolInput
++							? { _meta: { lody: { toolInputStream: { version: 1 } } } }
++							: {}),
+ 					},
+ 				};
+ 			})
+@@ -53,8 +64,8 @@
+ ): Promise<void> {
+ 	let host: AcpSessionHost | undefined;
+ 	const createHost = options.hostFactory;
+-	const hostFactory = (client: acp.AgentContext): AcpSessionHost => {
+-		host ??= createHost?.(client) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
++	const hostFactory = (client: acp.AgentContext, toolInputStream: boolean): AcpSessionHost => {
++		host ??= createHost?.(client, toolInputStream) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions, toolInputStream });
+ 		return host;
+ 	};
+ 	try {
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -19,6 +19,7 @@
+ import { ProjectTrustStore } from "../../core/trust-manager.ts";
+ import { toBangbooPrompt } from "./content.ts";
+ import { mapAgentSessionEvent, replaySessionHistory } from "./event-mapper.ts";
++import { AcpToolInputStreams } from "./tool-input-stream.ts";
+ 
+ export interface HostedSession {
+ 	session: AgentSession;
+@@ -202,6 +203,8 @@
+ 	client: acp.AgentContext;
+ 	extensionFactories: InlineExtension[];
+ 	dependencies?: Partial<AcpSessionHostDependencies>;
++	/** Send `_lody/session/tool_input` only after the client advertised v1. */
++	toolInputStream?: boolean;
+ }): AcpSessionHost {
+ 	const dependencies = { ...defaultDependencies, ...options.dependencies };
+ 	const sessions = new Map<string, HostedSession>();
+@@ -360,11 +363,17 @@
+ 				throw acp.RequestError.invalidParams(undefined, "Images cannot be combined with /compact");
+ 			}
+ 			const run = (async (): Promise<acp.PromptResponse> => {
++				let toolInputEnd: "cancelled" | "failed" | "incomplete" = "incomplete";
+ 				let delivery = Promise.resolve();
++				const queueNotify = (method: string, payload: unknown): void => {
++					delivery = delivery.then(() => options.client.notify(method, payload));
++				};
+ 				const queueUpdate = (update: acp.SessionUpdate): void => {
+-					delivery = delivery.then(() =>
+-						options.client.notify(acp.methods.client.session.update, { sessionId: params.sessionId, update }),
+-					);
++					queueNotify(acp.methods.client.session.update, { sessionId: params.sessionId, update });
++				};
++				const streams = new AcpToolInputStreams(params.sessionId, options.toolInputStream === true);
++				const queueToolInput = (event: Parameters<AcpToolInputStreams["ingest"]>[0]): void => {
++					for (const notification of streams.ingest(event)) queueNotify(notification.method, notification.params);
+ 				};
+ 				const queueUsage = (): void => {
+ 					const usage = hosted.session.getContextUsage();
+@@ -373,6 +382,7 @@
+ 					}
+ 				};
+ 				const unsubscribe = hosted.session.subscribe((event) => {
++					queueToolInput(event);
+ 					for (const update of mapAgentSessionEvent(event)) queueUpdate(update);
+ 					if (event.type === "agent_settled") queueUsage();
+ 				});
+@@ -399,6 +409,7 @@
+ 				} catch (error) {
+ 					await delivery;
+ 					const message = error instanceof Error ? error.message : String(error);
++					toolInputEnd = cancelledPrompts.has(params.sessionId) || /abort|cancel/i.test(message) ? "cancelled" : "failed";
+ 					if (cancelledPrompts.has(params.sessionId) || /abort|cancel/i.test(message)) return { stopReason: "cancelled" };
+ 					if (!compactCommand) {
+ 						if (/context|token limit|too long/i.test(message)) return { stopReason: "max_tokens" };
+@@ -407,6 +418,11 @@
+ 					throw error;
+ 				} finally {
+ 					unsubscribe();
++					const status = cancelledPrompts.has(params.sessionId) ? "cancelled" : toolInputEnd;
++					for (const notification of streams.closeAll(status, status === "cancelled" ? "prompt cancelled" : "prompt ended")) {
++						queueNotify(notification.method, notification.params);
++					}
++					await delivery;
+ 				}
+ 			})();
+ 			activePrompts.set(params.sessionId, run);
+@@ -428,7 +444,9 @@
+ 		async dispose() {
+ 			if (disposed) return;
+ 			disposed = true;
++			for (const sessionId of activePrompts.keys()) cancelledPrompts.add(sessionId);
+ 			await Promise.all([...sessions.values()].map(disposeHosted));
++			await Promise.allSettled([...activePrompts.values()]);
+ 			sessions.clear();
+ 		},
+ 	};
+diff --git a/packages/coding-agent/src/modes/acp/tool-input-stream.ts b/packages/coding-agent/src/modes/acp/tool-input-stream.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/src/modes/acp/tool-input-stream.ts
+@@ -0,0 +1,152 @@
++import { randomUUID } from "node:crypto";
++import type { AgentSessionEvent } from "../../core/agent-session.ts";
++
++const METHOD = "_lody/session/tool_input";
++const MAX_STREAM_BYTES = 1024 * 1024;
++const MAX_DELTA_BYTES = 64 * 1024;
++const MAX_OPEN = 32;
++
++type EndStatus = "completed" | "cancelled" | "failed" | "incomplete";
++
++export interface ToolInputNotification {
++	method: typeof METHOD;
++	params: {
++		version: 1;
++		sessionId: string;
++		toolCallId: string;
++		streamId: string;
++		seq: number;
++		event:
++			| { type: "start"; toolName?: string; initialInput?: Record<string, unknown> }
++			| { type: "delta"; delta: string }
++			| { type: "end"; status: EndStatus; reason?: string };
++	};
++}
++
++interface OpenStream {
++	streamId: string;
++	seq: number;
++	bytes: number;
++}
++
++/**
++ * Forwards Bangboo `toolcall_start` / `toolcall_delta` / `toolcall_end` as Core
++ * tool-input events. Deltas are the provider's raw fragments. A parsed partial
++ * is never re-serialized into a fake fragment.
++ */
++export class AcpToolInputStreams {
++	private readonly open = new Map<string, OpenStream>();
++
++	private readonly sessionId: string;
++	private readonly enabled: boolean;
++
++	constructor(sessionId: string, enabled: boolean) {
++		this.sessionId = sessionId;
++		this.enabled = enabled;
++	}
++
++	ingest(event: AgentSessionEvent): ToolInputNotification[] {
++		if (!this.enabled || event.type !== "message_update") return [];
++		const update = event.assistantMessageEvent;
++		if (update.type !== "toolcall_start" && update.type !== "toolcall_delta" && update.type !== "toolcall_end") {
++			return [];
++		}
++		const block = update.partial.content[update.contentIndex];
++		if (!block || block.type !== "toolCall" || !block.id) return [];
++		if (update.type === "toolcall_start") return this.start(block.id, block.name, structuredClone(block.arguments));
++		if (update.type === "toolcall_delta") return this.delta(block.id, update.delta);
++		return this.finish(block.id, "completed");
++	}
++
++	closeAll(status: Exclude<EndStatus, "completed">, reason: string): ToolInputNotification[] {
++		return [...this.open.keys()].flatMap((toolCallId) => this.finish(toolCallId, status, reason));
++	}
++
++	private start(toolCallId: string, toolName: string, initialInput: Record<string, unknown>): ToolInputNotification[] {
++		const ended = this.open.has(toolCallId) ? this.finish(toolCallId, "incomplete", "tool input restarted") : [];
++		const bytes = Buffer.byteLength(JSON.stringify(initialInput), "utf8");
++		const overLimit = bytes > MAX_STREAM_BYTES || this.open.size >= MAX_OPEN;
++		const stream: OpenStream = { streamId: `tis-${randomUUID()}`, seq: 0, bytes };
++		const start = this.emit(toolCallId, stream, { type: "start", ...(toolName ? { toolName } : {}), ...(!overLimit ? { initialInput } : {}) });
++		if (overLimit) {
++			return [...ended, start, this.emit(toolCallId, stream, {
++				type: "end",
++				status: "incomplete",
++				reason: "tool input capacity exceeded",
++			})];
++		}
++		this.open.set(toolCallId, stream);
++		return [...ended, start];
++	}
++
++	private delta(toolCallId: string, delta: string): ToolInputNotification[] {
++		const stream = this.open.get(toolCallId);
++		if (!stream) return [];
++		const events: ToolInputNotification[] = [];
++		for (const piece of splitUtf8(delta, MAX_DELTA_BYTES)) {
++			const pieceBytes = Buffer.byteLength(piece, "utf8");
++			if (stream.bytes + pieceBytes > MAX_STREAM_BYTES) {
++				return [...events, ...this.finish(toolCallId, "incomplete", "tool input exceeded 1 MiB")];
++			}
++			stream.bytes += pieceBytes;
++			events.push(this.emit(toolCallId, stream, { type: "delta", delta: piece }));
++		}
++		return events;
++	}
++
++	private finish(toolCallId: string, status: EndStatus, reason?: string): ToolInputNotification[] {
++		const stream = this.open.get(toolCallId);
++		if (!stream) return [];
++		this.open.delete(toolCallId);
++		return [this.emit(toolCallId, stream, { type: "end", status, ...(reason ? { reason } : {}) })];
++	}
++
++	private emit(
++		toolCallId: string,
++		stream: OpenStream,
++		event: ToolInputNotification["params"]["event"],
++	): ToolInputNotification {
++		return {
++			method: METHOD,
++			params: {
++				version: 1,
++				sessionId: this.sessionId,
++				toolCallId,
++				streamId: stream.streamId,
++				seq: stream.seq++,
++				event,
++			},
++		};
++	}
++}
++
++function splitUtf8(text: string, maxBytes: number): string[] {
++	if (Buffer.byteLength(text, "utf8") <= maxBytes) return [text];
++	const parts: string[] = [];
++	let start = 0;
++	let index = 0;
++	let bytes = 0;
++	for (const point of text) {
++		const size = Buffer.byteLength(point, "utf8");
++		if (bytes + size > maxBytes) {
++			parts.push(text.slice(start, index));
++			start = index;
++			bytes = 0;
++		}
++		bytes += size;
++		index += point.length;
++	}
++	parts.push(text.slice(start));
++	return parts;
++}
++
++export function clientWantsToolInputStream(capabilities: unknown): boolean {
++	if (!capabilities || typeof capabilities !== "object") return false;
++	const meta = (capabilities as { _meta?: unknown })._meta;
++	if (!meta || typeof meta !== "object") return false;
++	const lody = (meta as { lody?: unknown }).lody;
++	if (!lody || typeof lody !== "object") return false;
++	const toolInputStream = (lody as { toolInputStream?: unknown }).toolInputStream;
++	return !!toolInputStream && typeof toolInputStream === "object"
++		&& (toolInputStream as { version?: unknown }).version === 1;
++}
+diff --git a/packages/coding-agent/test/acp/tool-input-stream.test.ts b/packages/coding-agent/test/acp/tool-input-stream.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/test/acp/tool-input-stream.test.ts
+@@ -0,0 +1,81 @@
++import { describe, expect, it } from "vitest";
++import type { AgentSessionEvent } from "../../src/core/agent-session.ts";
++import { AcpToolInputStreams, clientWantsToolInputStream } from "../../src/modes/acp/tool-input-stream.ts";
++
++function toolEvent(type: "toolcall_start" | "toolcall_delta" | "toolcall_end", extra: Record<string, unknown> = {}): AgentSessionEvent {
++	const partial = {
++		role: "assistant",
++		content: [{ type: "toolCall", id: "call-1", name: "write", arguments: { path: "/tmp/a.txt", text: "already parsed" } }],
++		timestamp: 1,
++	};
++	return {
++		type: "message_update",
++		message: partial,
++		assistantMessageEvent: { type, contentIndex: 0, partial, ...extra },
++	} as AgentSessionEvent;
++}
++
++describe("ACP tool input stream", () => {
++	it("forwards raw deltas before execution and does not re-serialize the live partial", () => {
++		const streams = new AcpToolInputStreams("session-1", true);
++		const start = streams.ingest(toolEvent("toolcall_start"));
++		const delta = streams.ingest(toolEvent("toolcall_delta", { delta: "{\"text\":\"笔记\"}" }));
++		expect(start[0]?.params).toMatchObject({
++			version: 1,
++			sessionId: "session-1",
++			toolCallId: "call-1",
++			seq: 0,
++			event: { type: "start", toolName: "write" },
++		});
++		expect(start[0]?.params.event).not.toHaveProperty("initialArguments");
++		expect(start[0]?.params.event).toMatchObject({ initialInput: { text: "already parsed" } });
++		expect(delta[0]?.params).toMatchObject({
++			seq: 1,
++			event: { type: "delta", delta: "{\"text\":\"笔记\"}" },
++		});
++		expect(streams.ingest(toolEvent("toolcall_end"))[0]?.params.event).toEqual({ type: "end", status: "completed" });
++	});
++
++	it("ends an open stream when the prompt is cancelled", () => {
++		const streams = new AcpToolInputStreams("session-1", true);
++		streams.ingest(toolEvent("toolcall_start"));
++		expect(streams.closeAll("cancelled", "prompt cancelled")[0]?.params.event).toEqual({
++			type: "end",
++			status: "cancelled",
++			reason: "prompt cancelled",
++		});
++		expect(streams.ingest(toolEvent("toolcall_delta", { delta: "late" }))).toEqual([]);
++	});
++
++	it("stays silent unless the client advertised the capability", () => {
++		const streams = new AcpToolInputStreams("session-1", false);
++		expect(streams.ingest(toolEvent("toolcall_start"))).toEqual([]);
++		expect(clientWantsToolInputStream({ _meta: { lody: { toolInputStream: { version: 1 } } } })).toBe(true);
++		expect(clientWantsToolInputStream({ _meta: { lody: { subagentEvents: { version: 1 } } } })).toBe(false);
++	});
++});
++
++
++it("copies the start snapshot and keeps stream ids unique across prompts", () => {
++    const event = toolEvent("toolcall_start");
++    const first = new AcpToolInputStreams("session-1", true).ingest(event)[0]!;
++    const second = new AcpToolInputStreams("session-1", true).ingest(event)[0]!;
++    if (event.type === "message_update") {
++        const block = event.assistantMessageEvent.partial.content[0];
++        if (block.type === "toolCall") block.arguments.text = "later mutation";
++    }
++    expect(first.params.event).toMatchObject({ initialInput: { text: "already parsed" } });
++    expect(first.params.streamId).not.toBe(second.params.streamId);
++});
++
++it("splits Unicode without changing raw text and stops only the capped stream", () => {
++    const streams = new AcpToolInputStreams("s", true);
++    streams.ingest(toolEvent("toolcall_start"));
++    const text = "中🌱".repeat(20000) + "\ud83c" + "x".repeat(65536);
++    const deltas = streams.ingest(toolEvent("toolcall_delta", {delta: text}));
++    expect(deltas.map(e => e.params.event.type === "delta" ? e.params.event.delta : "").join("")).toBe(text);
++    expect(deltas.every(e => e.params.event.type === "delta" && Buffer.byteLength(e.params.event.delta) <= 65536)).toBe(true);
++    const capped = streams.ingest(toolEvent("toolcall_delta", {delta: "x".repeat(1024 * 1024)}));
++    expect(capped.at(-1)?.params.event).toMatchObject({type: "end", status: "incomplete"});
++    expect(streams.ingest(toolEvent("toolcall_delta", {delta: "late"}))).toEqual([]);
++});
+diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
+--- a/packages/coding-agent/test/acp/acp-mode.test.ts
++++ b/packages/coding-agent/test/acp/acp-mode.test.ts
+@@ -76,4 +76,28 @@
+ 			process.exitCode = previousExitCode;
+ 		}
+ 	});
++    it("passes negotiated input streaming through the production host wrapper", async () => {
++        const seen: boolean[] = [];
++        const host = {
++            newSession: async () => ({sessionId: "s", configOptions: [], availableCommands: []}),
++            loadSession: async () => ({configOptions: [], availableCommands: []}),
++            setConfigOption: async () => ({configOptions: []}),
++            prompt: async () => ({stopReason: "end_turn" as const}),
++            cancel: async () => {}, dispose: async () => {},
++        } satisfies AcpSessionHost;
++        for (const enabled of [false, true]) {
++            await runAcpAgentApp(async app => {
++                await acp.client({name: "test"}).connectWith(app, async agent => {
++                    const result = await agent.request(acp.methods.agent.initialize, {
++                        protocolVersion: acp.PROTOCOL_VERSION,
++                        clientCapabilities: enabled ? {_meta: {lody: {toolInputStream: {version: 1}}}} : {},
++                    });
++                    expect(result.agentCapabilities?._meta?.lody).toEqual(enabled ? {toolInputStream: {version: 1}} : undefined);
++                    await agent.request(acp.methods.agent.session.new, {cwd: "/tmp", mcpServers: []});
++                });
++            }, {hostFactory: (_client, toolInputStream) => {seen.push(toolInputStream); return host;}});
++        }
++        expect(seen).toEqual([false, true]);
++    });
++
+ });
