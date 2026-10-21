@@ -24,6 +24,6 @@ describe("buildStagingCommands", () => {
     const patchDir = new URL("../../patches/", import.meta.url);
     const patches = (await readdir(patchDir)).filter((name) => name.endsWith(".patch")).sort();
 
-    expect(patches.at(-1)).toBe("0010-acp-startup-session-config.patch");
+    expect(patches.at(-1)).toBe("0011-acp-client-mcp-servers.patch");
   });
 });

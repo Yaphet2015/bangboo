@@ -1,0 +1,644 @@
+diff --git a/packages/coding-agent/src/core/acp-mcp-servers.ts b/packages/coding-agent/src/core/acp-mcp-servers.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/src/core/acp-mcp-servers.ts
+@@ -0,0 +1,99 @@
++import { Type } from "typebox";
++import { Check } from "typebox/value";
++import { getAgentDir } from "../config.ts";
++import { loadMcpConfig } from "../extensions/mcp/config.ts";
++import type { InlineExtension } from "./extensions/types.ts";
++import { type McpServerConfig, mcpNamespace, validateMcpServerConfig } from "./mcp-servers.ts";
++
++const namedValueSchema = Type.Object({
++	name: Type.String({ minLength: 1 }),
++	value: Type.String(),
++});
++const acpMcpServerSchema = Type.Union([
++	Type.Object({
++		name: Type.String({ minLength: 1 }),
++		type: Type.Optional(Type.Literal("stdio")),
++		command: Type.String({ minLength: 1 }),
++		args: Type.Array(Type.String()),
++		env: Type.Array(namedValueSchema),
++	}),
++	Type.Object({
++		name: Type.String({ minLength: 1 }),
++		type: Type.Literal("http"),
++		url: Type.String(),
++		headers: Type.Array(namedValueSchema),
++	}),
++]);
++
++/** ACP values are already resolved. Escape config references to preserve them in the transport. */
++function mapLiteralValues(values: readonly { name: string; value: string }[]): Record<string, string> {
++	return Object.fromEntries(
++		values.map(({ name, value }) => {
++			const escaped = value.replaceAll("$", () => "$$");
++			return [name, escaped.startsWith("!") ? `$${escaped}` : escaped];
++		}),
++	);
++}
++
++export function mapAcpMcpServer(raw: unknown): { name: string; config: McpServerConfig } | string {
++	if (!Check(acpMcpServerSchema, raw)) return "Invalid ACP MCP server: expected a stdio or HTTP server";
++	const config: McpServerConfig =
++		raw.type === "http"
++			? {
++					type: "http",
++					url: raw.url,
++					headers: mapLiteralValues(raw.headers),
++				}
++			: {
++					type: "stdio",
++					command: raw.command,
++					args: [...raw.args],
++					env: mapLiteralValues(raw.env),
++				};
++	const validated = validateMcpServerConfig(raw.name, config);
++	return typeof validated === "string" ? validated : { name: raw.name, config: validated };
++}
++
++/** Registers trusted ACP client entries for this runtime only, after local extensions have loaded. */
++export function createAcpMcpServersExtension(servers: readonly unknown[]): InlineExtension {
++	return {
++		name: "acp-mcp-servers",
++		factory: (pi) => {
++			const registered = new Set<string>();
++			pi.on("session_start", (_event, ctx) => {
++				const configured = loadMcpConfig({
++					agentDir: getAgentDir(),
++					cwd: ctx.cwd,
++					projectTrusted: ctx.isProjectTrusted(),
++				});
++				for (const raw of servers) {
++					const mapped = mapAcpMcpServer(raw);
++					if (typeof mapped === "string") {
++						console.warn(`[ACP] ${mapped}`);
++						continue;
++					}
++					const { name, config } = mapped;
++					if (registered.has(name)) continue;
++					const namespace = mcpNamespace(name);
++					const local = [...configured.servers, ...pi.getMcpServers()].find(
++						(server) => mcpNamespace(server.name) === namespace,
++					);
++					if (local) {
++						console.warn(
++							`[ACP] Skipping client MCP server "${name}": local server "${local.name}" takes precedence`,
++						);
++						continue;
++					}
++					try {
++						pi.registerMcpServer(name, config);
++						registered.add(name);
++					} catch (error) {
++						console.warn(
++							`[ACP] Could not register client MCP server "${name}": ${error instanceof Error ? error.message : String(error)}`,
++						);
++					}
++				}
++			});
++		},
++	};
++}
+diff --git a/packages/coding-agent/src/modes/acp/session-host.ts b/packages/coding-agent/src/modes/acp/session-host.ts
+--- a/packages/coding-agent/src/modes/acp/session-host.ts
++++ b/packages/coding-agent/src/modes/acp/session-host.ts
+@@ -5,12 +5,14 @@
+ import { Type } from "typebox";
+ import { Check } from "typebox/value";
+ import { getAgentDir } from "../../config.ts";
++import { createAcpMcpServersExtension } from "../../core/acp-mcp-servers.ts";
+ import type { AgentSession } from "../../core/agent-session.ts";
+ import {
+ 	type AgentSessionServices,
+ 	createAgentSessionFromServices,
+ 	createAgentSessionServices,
+ } from "../../core/agent-session-services.ts";
++import { emitSessionShutdownEvent } from "../../core/extensions/runner.ts";
+ import type { InlineExtension } from "../../core/extensions/types.ts";
+ import { SessionManager } from "../../core/session-manager.ts";
+ import { SettingsManager } from "../../core/settings-manager.ts";
+@@ -172,6 +174,7 @@
+ }): AcpSessionHost {
+ 	const dependencies = { ...defaultDependencies, ...options.dependencies };
+ 	const sessions = new Map<string, HostedSession>();
++	const boundSessions = new WeakSet<AgentSession>();
+ 	const reservedSessionIds = new Set<string>();
+ 	const activePrompts = new Map<string, Promise<acp.PromptResponse>>();
+ 	const cancelledPrompts = new Set<string>();
+@@ -179,6 +182,9 @@
+ 
+ 	async function disposeHosted({ session, services }: HostedSession): Promise<void> {
+ 		await session.abort();
++		if (boundSessions.delete(session)) {
++			await emitSessionShutdownEvent(session.extensionRunner, { type: "session_shutdown", reason: "quit" });
++		}
+ 		await services.settingsManager.flush();
+ 		session.dispose();
+ 	}
+@@ -204,10 +210,15 @@
+ 		sessionId: string,
+ 		create: (extensionFactories: InlineExtension[]) => Promise<HostedSession>,
+ 		startupConfig?: StartupSessionConfig,
++		mcpServers: readonly acp.McpServer[] = [],
+ 	): Promise<{ hosted: HostedSession; configOptions: acp.SessionConfigOption[] }> {
++		const hasMcpServers = mcpServers.length > 0;
+ 		let hosted: HostedSession | undefined;
+ 		try {
+-			hosted = await create(options.extensionFactories);
++			const extensionFactories = hasMcpServers
++				? [...options.extensionFactories, createAcpMcpServersExtension(mcpServers)]
++				: options.extensionFactories;
++			hosted = await create(extensionFactories);
+ 			if (startupConfig?.model !== undefined) {
+ 				const available = await hosted.services.modelRuntime.getAvailable();
+ 				const model = available.find((candidate) => modelValue(candidate) === startupConfig.model);
+@@ -219,6 +230,12 @@
+ 				if (hosted.session.getAvailableThinkingLevels().includes(level)) {
+ 					hosted.session.setThinkingLevel(level);
+ 				}
++			}
++			if (hasMcpServers) {
++				boundSessions.add(hosted.session);
++				await hosted.session.bindExtensions({
++					onError: (error) => console.warn(`[ACP] Extension warning: ${error.error}`),
++				});
+ 			}
+ 			sessions.set(sessionId, hosted);
+ 			return { hosted, configOptions: await config(hosted) };
+@@ -244,6 +261,7 @@
+ 				sessionId,
+ 				(extensionFactories) => dependencies.createRuntime(cwd, sessionManager, extensionFactories),
+ 				startupConfig,
++				params.mcpServers,
+ 			);
+ 			return { sessionId, configOptions: installed.configOptions };
+ 		},
+@@ -265,6 +283,7 @@
+ 					return dependencies.createRuntime(cwd, dependencies.openSessionManager(match.path), extensionFactories);
+ 				},
+ 				startupConfig,
++				params.mcpServers,
+ 			);
+ 			await replaySessionHistory(params.sessionId, installed.hosted.session.messages ?? [], options.client);
+ 			return { configOptions: installed.configOptions };
+diff --git a/packages/coding-agent/src/modes/acp/acp-mode.ts b/packages/coding-agent/src/modes/acp/acp-mode.ts
+--- a/packages/coding-agent/src/modes/acp/acp-mode.ts
++++ b/packages/coding-agent/src/modes/acp/acp-mode.ts
+@@ -1,8 +1,8 @@
+ import { Readable, Writable } from "node:stream";
+ import * as acp from "@agentclientprotocol/sdk";
++import { APP_NAME, VERSION } from "../../config.ts";
+ import { builtInExtensions } from "../../extensions/index.ts";
+-import { APP_NAME, VERSION } from "../../config.ts";
+-import { createBangbooSessionHost, type AcpSessionHost } from "./session-host.ts";
++import { type AcpSessionHost, createBangbooSessionHost } from "./session-host.ts";
+ 
+ export interface AcpModeOptions {
+ 	version?: string;
+@@ -12,32 +12,39 @@
+ export function createAcpAgentApp(options: AcpModeOptions = {}): acp.AgentApp {
+ 	let host: AcpSessionHost | undefined;
+ 	const getHost = (client: acp.AgentContext): AcpSessionHost => {
+-		host ??= options.hostFactory?.(client) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
++		host ??=
++			options.hostFactory?.(client) ?? createBangbooSessionHost({ client, extensionFactories: builtInExtensions });
+ 		return host;
+ 	};
+-	return acp
+-		.agent({ name: APP_NAME })
+-		.onRequest(acp.methods.agent.initialize, ({ params }) => {
+-			if (params.protocolVersion !== acp.PROTOCOL_VERSION) {
+-				throw acp.RequestError.invalidParams(
+-					{ protocolVersion: params.protocolVersion },
+-					`Unsupported ACP protocol version; expected ${acp.PROTOCOL_VERSION}`,
+-				);
+-			}
+-			return {
+-				protocolVersion: acp.PROTOCOL_VERSION,
+-				agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
+-				agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },
+-			};
+-		})
+-		.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
+-		.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
+-		// ACP method: session/set_config_option
+-		.onRequest(acp.methods.agent.session.setConfigOption, ({ params, client }) =>
+-			getHost(client).setConfigOption(params),
+-		)
+-		.onRequest(acp.methods.agent.session.prompt, ({ params, client }) => getHost(client).prompt(params))
+-		.onNotification(acp.methods.agent.session.cancel, ({ params, client }) => getHost(client).cancel(params));
++	return (
++		acp
++			.agent({ name: APP_NAME })
++			.onRequest(acp.methods.agent.initialize, ({ params }) => {
++				if (params.protocolVersion !== acp.PROTOCOL_VERSION) {
++					throw acp.RequestError.invalidParams(
++						{ protocolVersion: params.protocolVersion },
++						`Unsupported ACP protocol version; expected ${acp.PROTOCOL_VERSION}`,
++					);
++				}
++				return {
++					protocolVersion: acp.PROTOCOL_VERSION,
++					agentInfo: { name: APP_NAME, version: options.version ?? VERSION },
++					agentCapabilities: {
++						loadSession: true,
++						promptCapabilities: { image: true },
++						mcpCapabilities: { http: true },
++					},
++				};
++			})
++			.onRequest(acp.methods.agent.session.new, ({ params, client }) => getHost(client).newSession(params))
++			.onRequest(acp.methods.agent.session.load, ({ params, client }) => getHost(client).loadSession(params))
++			// ACP method: session/set_config_option
++			.onRequest(acp.methods.agent.session.setConfigOption, ({ params, client }) =>
++				getHost(client).setConfigOption(params),
++			)
++			.onRequest(acp.methods.agent.session.prompt, ({ params, client }) => getHost(client).prompt(params))
++			.onNotification(acp.methods.agent.session.cancel, ({ params, client }) => getHost(client).cancel(params))
++	);
+ }
+ 
+ export async function runAcpAgentApp(
+diff --git a/packages/coding-agent/src/extensions/mcp/index.ts b/packages/coding-agent/src/extensions/mcp/index.ts
+--- a/packages/coding-agent/src/extensions/mcp/index.ts
++++ b/packages/coding-agent/src/extensions/mcp/index.ts
+@@ -645,10 +645,9 @@
+ 					lines.push(`${server.entry.name}: ${describeState(server)}`);
+ 			}
+ 			if (lines.length === 0) return;
+-			ctx.ui.notify(
+-				`MCP servers need attention:\n${lines.map((line) => `  ${line}`).join("\n")}\nRun /mcp to fix.`,
+-				"warning",
+-			);
++			const message = `MCP servers need attention:\n${lines.map((line) => `  ${line}`).join("\n")}\nRun /mcp to fix.`;
++			if (ctx.hasUI) ctx.ui.notify(message, "warning");
++			else console.warn(message);
+ 		};
+ 
+ 		/**
+@@ -1142,7 +1141,9 @@
+ 				.catch((error: unknown) => {
+ 					// The session may have been disposed meanwhile, which makes ctx stale.
+ 					try {
+-						ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
++						const message = `MCP failed to load: ${errorMessage(error)}`;
++						if (ctx.hasUI) ctx.ui.notify(message, "error");
++						else console.warn(message);
+ 					} catch {}
+ 				});
+ 		});
+diff --git a/packages/coding-agent/test/acp/mcp-servers.test.ts b/packages/coding-agent/test/acp/mcp-servers.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/test/acp/mcp-servers.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it } from "vitest";
++import { mapAcpMcpServer } from "../../src/core/acp-mcp-servers.ts";
++import { resolveConfigValueOrThrow } from "../../src/core/resolve-config-value.ts";
++
++describe("ACP MCP server mapping", () => {
++	// biome-ignore lint/suspicious/noTemplateCurlyInString: ACP sends literal values, including config-like text.
++	it.each(["session-1", "${LODY_MCP_SESSION_ID}", "$VARIABLE", "!exit 1", "$$", "", "value$!tail"])(
++		"preserves resolved stdio environment and HTTP header values: %j",
++		(value) => {
++			const stdio = mapAcpMcpServer({
++				name: "lody",
++				command: "/usr/bin/node",
++				args: ["--server"],
++				env: [{ name: "LODY_MCP_SESSION_ID", value }],
++			});
++			if (typeof stdio === "string" || !("command" in stdio.config)) throw new Error("Expected stdio config");
++			expect(stdio.config.command).toBe("/usr/bin/node");
++			expect(stdio.config.args).toEqual(["--server"]);
++			expect(resolveConfigValueOrThrow(stdio.config.env!.LODY_MCP_SESSION_ID, "test env")).toBe(value);
++			const http = mapAcpMcpServer({
++				type: "http",
++				name: "lody",
++				url: "http://127.0.0.1/mcp",
++				headers: [{ name: "X-Lody-Session", value }],
++			});
++			if (typeof http === "string" || !("url" in http.config)) throw new Error("Expected HTTP config");
++			expect(http.config.url).toBe("http://127.0.0.1/mcp");
++			expect(resolveConfigValueOrThrow(http.config.headers!["X-Lody-Session"], "test header")).toBe(value);
++		},
++	);
++
++	it.each([
++		null,
++		{},
++		{ name: "bad name", command: "node", args: [], env: [] },
++		{ name: "lody", command: "", args: [], env: [] },
++		{ name: "lody", command: "node", args: [1], env: [] },
++		{ name: "lody", command: "node", args: [], env: [{ name: "KEY", value: 1 }] },
++		{ name: "lody", command: "node", args: [], env: {} },
++		{ type: "http", name: "lody", url: "file:///tmp/mcp", headers: [] },
++		{ type: "http", name: "lody", url: "http://127.0.0.1/mcp", headers: [{ name: "Header", value: true }] },
++		{ type: "sse", name: "lody", url: "http://127.0.0.1/mcp", headers: [] },
++		{ type: "acp", name: "lody", serverId: "server-1" },
++	])("rejects invalid or unsupported client MCP entries: %j", (raw) => {
++		expect(mapAcpMcpServer(raw)).toEqual(expect.any(String));
++	});
++});
+diff --git a/packages/coding-agent/test/acp/session-host.test.ts b/packages/coding-agent/test/acp/session-host.test.ts
+--- a/packages/coding-agent/test/acp/session-host.test.ts
++++ b/packages/coding-agent/test/acp/session-host.test.ts
+@@ -1,12 +1,18 @@
+-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
++import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import * as acp from "@agentclientprotocol/sdk";
+ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+ import { clampThinkingLevel, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
++import { LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
++import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { ENV_AGENT_DIR } from "../../src/config.ts";
++import type { ExtensionAPI, InlineExtension } from "../../src/core/extensions/types.ts";
+ import { getDefaultSessionDir, SessionManager } from "../../src/core/session-manager.ts";
++import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
++import type { McpServerEntry } from "../../src/extensions/mcp/config.ts";
++import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
+ import { createAcpAgentApp } from "../../src/modes/acp/acp-mode.ts";
+ import {
+ 	type AcpSessionHost,
+@@ -14,6 +20,7 @@
+ 	createBangbooSessionHost,
+ 	type HostedSession,
+ } from "../../src/modes/acp/session-host.ts";
++import { createHarness, type Harness } from "../suite/harness.ts";
+ 
+ function fakeHost(): AcpSessionHost {
+ 	return {
+@@ -51,6 +58,8 @@
+ 		model: models[0],
+ 		thinkingLevel: "high",
+ 		getAvailableThinkingLevels: vi.fn(() => ["off", "low", "high"]),
++		bindExtensions: vi.fn(async () => {}),
++		extensionRunner: { hasHandlers: vi.fn(() => true), emit: vi.fn(async () => {}) },
+ 		setModel,
+ 		setThinkingLevel,
+ 		abort,
+@@ -187,7 +196,7 @@
+ 		expect(createRuntime).not.toHaveBeenCalled();
+ 	});
+ 
+-	it("accepts MCP metadata without adding MCP extensions", async () => {
++	it("passes client MCP servers to a temporary runtime extension and starts it", async () => {
+ 		const { host, createRuntime, hosted } = createPolicyHarness();
+ 		await host.newSession({
+ 			cwd: "/tmp/project",
+@@ -195,7 +204,8 @@
+ 		});
+ 
+ 		expect(createRuntime).toHaveBeenCalledTimes(1);
+-		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(0);
++		expect(createRuntime.mock.calls[0]?.[2]).toHaveLength(1);
++		expect(hosted[0].session.bindExtensions).toHaveBeenCalledTimes(1);
+ 		expect(hosted).toHaveLength(1);
+ 	});
+ 
+@@ -619,6 +629,159 @@
+ 	}
+ });
+ 
++describe.each(["new", "load"] as const)("Bangboo ACP session/%s client MCP servers", (method) => {
++	const hosts: AcpSessionHost[] = [];
++	const harnesses: Harness[] = [];
++	const roots: string[] = [];
++
++	afterEach(async () => {
++		for (const host of hosts.splice(0)) await host.dispose();
++		for (const harness of harnesses.splice(0)) harness.cleanup();
++		for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
++		vi.unstubAllEnvs();
++		vi.restoreAllMocks();
++	});
++
++	function setup(options: { localName?: string; pluginName?: string; fail?: boolean } = {}) {
++		const root = mkdtempSync(join(tmpdir(), "bangboo-acp-mcp-"));
++		roots.push(root);
++		vi.stubEnv(ENV_AGENT_DIR, root);
++		const configPath = join(root, "mcp.json");
++		if (options.localName) {
++			writeFileSync(configPath, JSON.stringify({ mcpServers: { [options.localName]: { command: "local" } } }));
++		}
++		const before = existsSync(configPath) ? readFileSync(configPath, "utf8") : undefined;
++		const connected: McpServerEntry[] = [];
++		const closed = vi.fn();
++		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
++		let harness: Harness;
++		let api: ExtensionAPI;
++		const host = createBangbooSessionHost({
++			client: {} as acp.AgentContext,
++			extensionFactories: [],
++			dependencies: {
++				...createPolicyHarness({ listedId: "session-1" }).dependencies,
++				createRuntime: async (_cwd, _manager, extensions) => {
++					const factories: InlineExtension[] = [
++						(pi) => {
++							api = pi;
++							if (options.pluginName) pi.registerMcpServer(options.pluginName, { command: "plugin" });
++						},
++						createCodemodeExtension(),
++						createMcpExtension({
++							createTransport: (entry) => {
++								connected.push(entry);
++								if (options.fail) throw new Error("fake MCP connection failed");
++								const pair = createInMemoryTransportPair();
++								pair.client.onClose(closed);
++								pair.server.onMessage((message) => {
++									if (!("id" in message) || !("method" in message)) return;
++									const result =
++										message.method === "initialize"
++											? {
++													protocolVersion: LATEST_PROTOCOL_VERSION,
++													capabilities: { tools: {} },
++													serverInfo: { name: entry.name, version: "1" },
++												}
++											: { tools: [{ name: "session_create", inputSchema: { type: "object" } }] };
++									queueMicrotask(() => void pair.server.send({ jsonrpc: "2.0", id: message.id, result }));
++								});
++								void pair.server.start();
++								return pair.client;
++							},
++						}),
++						...extensions,
++					];
++					harness = await createHarness({ extensionFactories: factories });
++					harnesses.push(harness);
++					return {
++						session: harness.session,
++						services: {
++							modelRuntime: { getAvailable: async () => harness.models },
++							settingsManager: harness.settingsManager,
++						} as never,
++					};
++				},
++			},
++		});
++		hosts.push(host);
++		async function start(mcpServers: acp.McpServer[]) {
++			const params = { cwd: "/tmp/project", mcpServers };
++			return method === "new" ? host.newSession(params) : host.loadSession({ ...params, sessionId: "session-1" });
++		}
++		return {
++			host,
++			start,
++			connected,
++			closed,
++			warning,
++			configPath,
++			before,
++			getHarness: () => harness,
++			getApi: () => api,
++		};
++	}
++
++	const stdio: acp.McpServer = {
++		name: "lody",
++		command: "/usr/bin/node",
++		args: ["lody-mcp.js"],
++		env: [{ name: "LODY_MCP_SESSION_ID", value: "session-1" }],
++	};
++	const http: acp.McpServer = {
++		type: "http",
++		name: "lody",
++		url: "http://127.0.0.1:1234/mcp",
++		headers: [{ name: "X-Lody-Session", value: "session-1" }],
++	};
++
++	it.each([stdio, http])("registers and connects %j without persisting client configuration", async (server) => {
++		const test = setup();
++		await test.start([server]);
++		await vi.waitFor(() =>
++			expect(test.getHarness().session.getCallableToolNames()).toContain("mcp__lody__session_create"),
++		);
++		expect(test.getApi().getMcpServers()).toMatchObject([
++			{ name: "lody", config: { type: "type" in server ? "http" : "stdio" } },
++		]);
++		expect(test.connected).toHaveLength(1);
++		expect(test.connected[0].scope).toBe("extension");
++		expect(test.getHarness().session.getActiveToolNames()).toContain("codemode");
++		expect(existsSync(test.configPath)).toBe(false);
++		await test.host.dispose();
++		expect(test.closed).toHaveBeenCalledTimes(1);
++	});
++
++	it.each([{ localName: "lody" }, { pluginName: "lody" }, { localName: "lody-tools" }, { pluginName: "lody-tools" }])(
++		"prefers local entries and their namespaces: %j",
++		async (options) => {
++			const test = setup(options);
++			const name = options.localName ?? options.pluginName;
++			await test.start([{ ...stdio, name: name === "lody-tools" ? "lody_tools" : "lody" }]);
++			await vi.waitFor(() => expect(test.connected).toHaveLength(1));
++			expect(test.connected[0]).toMatchObject({ name, config: { command: options.localName ? "local" : "plugin" } });
++			expect(test.warning).toHaveBeenCalledWith(expect.stringContaining("takes precedence"));
++			if (test.before) expect(readFileSync(test.configPath, "utf8")).toBe(test.before);
++		},
++	);
++
++	it("logs a failed connection while session startup still succeeds", async () => {
++		const test = setup({ fail: true });
++		await expect(test.start([stdio])).resolves.toHaveProperty("configOptions");
++		await vi.waitFor(() =>
++			expect(test.warning).toHaveBeenCalledWith(expect.stringContaining("fake MCP connection failed")),
++		);
++	});
++
++	it("does not start client MCP extensions when no servers are supplied", async () => {
++		const test = setup();
++		await test.start([]);
++		expect(test.getApi().getMcpServers()).toEqual([]);
++		expect(test.connected).toEqual([]);
++		expect(test.warning).not.toHaveBeenCalled();
++	});
++});
++
+ describe("Bangboo ACP persisted session lookup", () => {
+ 	const originalCwd = process.cwd();
+ 	const originalAgentDir = process.env[ENV_AGENT_DIR];
+@@ -699,6 +862,7 @@
+ 			thinkingLevel: "high",
+ 			messages: options.messages ?? [],
+ 			getAvailableThinkingLevels: vi.fn(() => ["off", "high"]),
++			bindExtensions: vi.fn(async () => {}),
+ 			getContextUsage: vi.fn(() => options.usage),
+ 			subscribe: vi.fn((next: (event: unknown) => void) => {
+ 				listener = next;
+@@ -729,7 +893,7 @@
+ 		return { host, session, notify };
+ 	}
+ 
+-	it("prompts normally when MCP metadata is ignored", async () => {
++	it("prompts normally with client MCP servers", async () => {
+ 		const harness = createPromptHarness();
+ 		await harness.host.newSession({
+ 			cwd: "/tmp/project",
+diff --git a/packages/coding-agent/test/acp/acp-mode.test.ts b/packages/coding-agent/test/acp/acp-mode.test.ts
+--- a/packages/coding-agent/test/acp/acp-mode.test.ts
++++ b/packages/coding-agent/test/acp/acp-mode.test.ts
+@@ -6,18 +6,22 @@
+ 
+ describe("ACP mode", () => {
+ 	it("advertises session loading after lifecycle handlers are registered", async () => {
+-		const initialize = await acp.client({ name: "test-client" }).connectWith(
+-			createAcpAgentApp({ version: "1.1.0" }),
+-			(client) =>
++		const initialize = await acp
++			.client({ name: "test-client" })
++			.connectWith(createAcpAgentApp({ version: "1.1.0" }), (client) =>
+ 				client.request(acp.methods.agent.initialize, {
+ 					protocolVersion: acp.PROTOCOL_VERSION,
+ 					clientCapabilities: {},
+ 				}),
+-		);
++			);
+ 
+ 		expect(initialize.protocolVersion).toBe(acp.PROTOCOL_VERSION);
+ 		expect(initialize.agentInfo).toMatchObject({ name: "bangboo", version: "1.1.0" });
+-		expect(initialize.agentCapabilities).toEqual({ loadSession: true, promptCapabilities: { image: true } });
++		expect(initialize.agentCapabilities).toEqual({
++			loadSession: true,
++			promptCapabilities: { image: true },
++			mcpCapabilities: { http: true },
++		});
+ 	});
+ 
+ 	it("rejects unsupported protocol versions", async () => {
+@@ -43,10 +47,13 @@
+ 		} satisfies AcpSessionHost;
+ 
+ 		await runAcpAgentApp(
+-			(app) =>
+-				acp.client({ name: "test-client" }).connectWith(app, (agent) =>
+-					agent.request(acp.methods.agent.session.new, { cwd: "/tmp/project", mcpServers: [] }),
+-				),
++			async (app) => {
++				await acp
++					.client({ name: "test-client" })
++					.connectWith(app, (agent) =>
++						agent.request(acp.methods.agent.session.new, { cwd: "/tmp/project", mcpServers: [] }),
++					);
++			},
+ 			{ hostFactory: () => host },
+ 		);
+ 
+diff --git a/packages/coding-agent/docs/acp.md b/packages/coding-agent/docs/acp.md
+--- a/packages/coding-agent/docs/acp.md
++++ b/packages/coding-agent/docs/acp.md
+@@ -19,6 +19,10 @@
+ 
+ Use an absolute `command` path when bb's host daemon PATH cannot resolve Bangboo.
+ 
+-ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported. MCP server metadata supplied by the client is accepted for bb compatibility but ignored; Bangboo does not connect to those servers or expose their tools.
++ACP state, sessions, and saved project trust live under `~/.bangboo/agent`. Model and thinking-level selection, cancellation, and text/image prompts are supported. Session fork, rename, archive, auto mode, and RPC UI are unsupported.
++
++`session/new` and `session/load` consume `_meta.lody.sessionConfig` version 1 before returning model and thinking-level options. Invalid structures return `invalidParams`; unknown models and unsupported thinking levels are ignored. Loading without this metadata preserves the saved configuration.
++
++Client `mcpServers` entries connect over stdio or streamable HTTP. Their tools use the same exposure and `mcp__<server>__<tool>` namespace as local MCP servers. Local `mcp.json` entries and package registrations take precedence on name or namespace collisions. Client entries apply only to this session and are never saved to `mcp.json`. Connection failures produce warnings on stderr and do not stop session startup.
+ 
+ ACP mode runs every tool with full permission. Tool calls are never sent to the client for approval. Connect only from clients and projects that you trust.
